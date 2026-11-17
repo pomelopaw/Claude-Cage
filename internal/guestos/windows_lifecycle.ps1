@@ -10,7 +10,8 @@ if ($action -eq 'start') {
     if ([string]$firmware.SecureBoot -ne 'On' -or [string]$firmware.SecureBootTemplate -ne 'MicrosoftWindows' -or $security.TpmEnabled -ne $true) { throw 'Guest security unavailable.' }
     # Until Cage's managed exit has a Windows adapter, this guest remains offline.
     if (@(Hyper-V\Get-VMNetworkAdapter -VM $vm).Count -ne 0) { throw 'Controlled exit unavailable.' }
-    if ([string]$vm.State -eq 'Off') { Hyper-V\Start-VM -VM $vm | Out-Null }
+    # Start-VM restores a Saved guest's memory state; never discard it to retry a boot.
+    if ([string]$vm.State -in @('Off', 'Saved')) { Hyper-V\Start-VM -VM $vm | Out-Null }
     elseif ([string]$vm.State -ne 'Running') { throw 'Guest cannot be started from this state.' }
 } elseif ($action -eq 'stop') {
     if ([string]$vm.State -eq 'Running') {
