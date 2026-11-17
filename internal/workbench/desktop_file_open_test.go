@@ -51,6 +51,29 @@ func TestNativeDesktopProjectPathsUseCurrentGuestMount(t *testing.T) {
 	}
 }
 
+func TestWindowsDriveProjectFilesStayInCurrentGrant(t *testing.T) {
+	s := testServer(t)
+	s.windowsGuest = &guestos.WindowsProfile{}
+	project := t.TempDir()
+	file := filepath.Join(project, "文档.md")
+	if err := os.WriteFile(file, []byte("live file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.projectShares = map[string]*projectShare{project: {done: make(chan struct{}), windowsProject: &windowsProjectBinding{Path: `Z:\`, ID: "0123456789abcdef", Grant: "test"}}}
+	for guest, host := range map[string]string{`Z:\`: project, `z:\文档.md`: file} {
+		got, err := s.resolveDesktopProjectFile(guest, []string{project})
+		want, _ := filepath.EvalSymlinks(host)
+		if err != nil || got != want {
+			t.Fatalf("%q: got %q, %v; want %q", guest, got, err, want)
+		}
+	}
+	for _, guest := range []string{`Z:`, `Z:\..\outside`, `Y:\文档.md`, `Z:\文档.md:stream`, `Z:\\文档.md`} {
+		if _, err := s.resolveDesktopProjectFile(guest, []string{project}); err == nil {
+			t.Fatalf("accepted %q", guest)
+		}
+	}
+}
+
 func TestDesktopFilePathsStayInProjectGrants(t *testing.T) {
 	project := t.TempDir()
 	file := filepath.Join(project, "中文 Word #+%.docx")

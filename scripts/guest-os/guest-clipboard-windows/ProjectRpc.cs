@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -12,6 +13,8 @@ internal static class ProjectRpc
 {
     private static readonly ConcurrentDictionary<string, Mount> Mounts = new(StringComparer.Ordinal);
     private static readonly SemaphoreSlim Slots = new(32, 32);
+    private static readonly ProjectDriveLetters Drives = new(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Cage", "Projects", "project-drives.json"), DriveOccupied);
     internal static event Action<string, string>? Revoked;
     private static readonly Regex ID = new("^[a-f0-9]{16}$", RegexOptions.CultureInvariant);
     private static readonly Regex Grant = new("^[a-f0-9]{64}$", RegexOptions.CultureInvariant);
@@ -96,13 +99,15 @@ internal static class ProjectRpc
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint) || info.GetAccessControl().GetOwner(typeof(SecurityIdentifier))?.Value != identity.User?.Value)
                 throw new InvalidDataException("project_mount_parent_invalid");
         }
-        var path = Path.Combine(parent, id);
-        // WinFsp owns mount-point creation and removal; never replace user files.
-        if (Path.Exists(path)) throw new InvalidDataException("project_mount_path_exists");
         var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "SSHFS-Win", "bin", "sshfs-win.exe");
         if (!File.Exists(executable)) throw new InvalidDataException("project_tools_missing");
+        using var drive = Drives.Acquire(id);
+        var path = drive.Root;
         var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { "cmd", ":/", CygwinPath(path), "-f", "-o", "slave,uid=-1,gid=-1,cache=no,nodev,nosuid" }) start.ArgumentList.Add(arg);
+        // A network volume prefix supplies a canonical UNC path to realpath().
+        // Directory mounts work for reads but fail Claude's folder admission check.
+        // This prefix is a local WinFsp volume name, not an SMB/network connection.
+        foreach (var arg in new[] { "cmd", ":/", path[..2], "-f", "-o", "slave,uid=-1,gid=-1,cache=no,nodev,nosuid,VolumePrefix=/cage-projects/" + id }) start.ArgumentList.Add(arg);
         using var child = new Process { StartInfo = start };
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         var mount = new Mount(grant, path, child, lifetime);
@@ -126,6 +131,9 @@ internal static class ProjectRpc
             try { child.StandardInput.Close(); } catch { }
             try { if (!child.HasExited) child.Kill(true); await child.WaitForExitAsync(); } catch { }
             foreach (var task in new[] { input, output, stderr, exited }) if (task is not null) try { await task; } catch { }
+            // A replacement mount may resume immediately when Done is completed.
+            // Release its letter first, after the old SSHFS process has exited.
+            drive.Dispose();
             mount.Done.TrySetResult();
         }
     }
@@ -137,10 +145,13 @@ internal static class ProjectRpc
             foreach (Action<string, string> handler in handlers.GetInvocationList())
                 try { handler(id, mount.Grant); } catch { /* all consumers must receive revocation */ }
     }
-    private static string CygwinPath(string path)
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint QueryDosDevice(string device, char[] target, int length);
+    private static bool DriveOccupied(char letter)
     {
-        if (path.Length < 4 || !char.IsAsciiLetter(path[0]) || path[1] != ':' || path[2] != '\\') throw new InvalidDataException("project_mount_path_invalid");
-        return "/cygdrive/" + char.ToLowerInvariant(path[0]) + path[2..].Replace('\\', '/');
+        // Includes unready/removable devices that Directory.Exists misses.
+        var buffer = new char[32768];
+        return QueryDosDevice(letter + ":", buffer, buffer.Length) != 0 || Marshal.GetLastWin32Error() != 2;
     }
     private sealed class Mount(string grant, string path, Process child, CancellationTokenSource lifetime)
     {

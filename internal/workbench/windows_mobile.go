@@ -37,7 +37,7 @@ func (s *Server) windowsConversationInput(record *mobileRecord, input map[string
 var errWindowsLegacyMobile = errors.New("这段历史来自尚未适配 Windows 的旧移动会话，记录已保留；请在原运行环境接续，或在 Windows 新建共享会话")
 
 func windowsCLIAbsolutePath(value string) bool {
-	return len(value) > 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')
+	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')
 }
 
 func windowsMediaFileName(root, cwd, reference string) (string, error) {
@@ -46,10 +46,11 @@ func windowsMediaFileName(root, cwd, reference string) (string, error) {
 		return "", fs.ErrInvalid
 	}
 	normalize := func(value string) string { return strings.ReplaceAll(value, "\\", "/") }
-	root, cwd, value = strings.TrimRight(normalize(root), "/"), normalize(cwd), normalize(value)
+	root, cwd, value = normalize(root), normalize(cwd), normalize(value)
 	if !windowsCLIAbsolutePath(root) || strings.HasPrefix(value, "/") {
 		return "", fs.ErrPermission
 	}
+	root = strings.TrimRight(root, "/")
 	if cwd == "" {
 		cwd = root
 	}

@@ -94,6 +94,11 @@ func startWindowsProjectTransport(cmd *exec.Cmd, hostPath string, binding window
 	return share, nil
 }
 func validWindowsProjectPath(path, id string) bool {
+	// Network drive mounts have a canonical path that Claude Desktop can resolve.
+	// Retain directory mounts for older guest components during rolling updates.
+	if len(path) == 3 && path[0] >= 'D' && path[0] <= 'Z' && path[1:] == `:\` {
+		return true
+	}
 	return len(path) < 4096 && len(path) > 3 && path[1] == ':' && path[2] == '\\' && !strings.ContainsAny(path, "\x00\r\n") && strings.HasSuffix(path, "\\Cage\\Projects\\"+id) && !strings.Contains(path, "\\..\\")
 }
 func (s *Server) windowsProjectRequest(ctx context.Context, action string, binding windowsProjectBinding, probe string) (map[string]any, error) {

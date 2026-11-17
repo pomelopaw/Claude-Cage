@@ -71,7 +71,10 @@ func (s *Server) resolveDesktopProjectFile(guest string, projects []string) (str
 			return "", errors.New("文件位置无效")
 		}
 	}
-	if pathpkg.Clean(guest) != guest || strings.ContainsAny(guest, "\x00\\") {
+	// path.Clean removes the slash from a Windows drive root. Accept that
+	// exact root, but continue rejecting unclean child paths and traversal.
+	driveRoot := s.windowsGuest != nil && len(guest) == 3 && guest[1:] == ":/"
+	if (!driveRoot && pathpkg.Clean(guest) != guest) || strings.ContainsAny(guest, "\x00\\") {
 		return "", errors.New("文件位置无效")
 	}
 	for _, project := range projects {
@@ -93,6 +96,9 @@ func (s *Server) resolveDesktopProjectFile(guest string, projects []string) (str
 			continue
 		}
 		mapped := strings.TrimRight(guestPath(project), "/") + guest[len(root):]
+		if driveRoot {
+			mapped = strings.TrimRight(mapped, "/")
+		}
 		return resolveProjectFilePath(mapped, []string{project})
 	}
 	return "", errors.New("只能打开已授权 Cage 项目中的文件和文件夹")

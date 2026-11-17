@@ -17,6 +17,20 @@ import (
 	"github.com/sylvinus/agent-vm/internal/remotelink"
 )
 
+func TestWindowsDriveRootMediaStaysInProject(t *testing.T) {
+	for _, reference := range []string{`Z:\image.png`, `image.png`, `sub/../image.png`} {
+		name, err := windowsMediaFileName(`Z:\`, `Z:\`, reference)
+		if err != nil || name != "image.png" {
+			t.Fatalf("drive-root media %q: %q, %v", reference, name, err)
+		}
+	}
+	for _, reference := range []string{`Y:\image.png`, `Z:relative.png`, `Z:\`, `Z:\image.png:stream`, `\\server\share\image.png`} {
+		if _, err := windowsMediaFileName(`Z:\`, `Z:\`, reference); err == nil {
+			t.Fatalf("accepted untrusted media %q", reference)
+		}
+	}
+}
+
 func windowsMobileFixture(t *testing.T) (*Server, *mobileRecord, func()) {
 	t.Helper()
 	s := windowsCLIRelayFixture(t)

@@ -16,6 +16,20 @@ import (
 	"github.com/sylvinus/agent-vm/internal/guestos"
 )
 
+func TestWindowsProjectDrivePath(t *testing.T) {
+	id := strings.Repeat("a", 16)
+	for _, path := range []string{`D:\`, `R:\`, `Z:\`, `C:\Users\Guest\Cage\Projects\` + id} {
+		if !validWindowsProjectPath(path, id) {
+			t.Errorf("rejected project mount %q", path)
+		}
+	}
+	for _, path := range []string{`C:\`, `A:\`, `R:`, `R:\child`, `R:/`, `\\host\share`, `R:\..\`, `1:\`} {
+		if validWindowsProjectPath(path, id) {
+			t.Errorf("accepted invalid mount %q", path)
+		}
+	}
+}
+
 func TestWindowsProjectTransportIsLiveAndConfined(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -71,7 +85,7 @@ func TestWindowsProjectRelayHelper(t *testing.T) {
 	if json.Unmarshal(line, &request) != nil || request.Action != "mount" || request.ID != strings.Repeat("a", 16) || request.Grant != strings.Repeat("b", 64) {
 		os.Exit(2)
 	}
-	if err = json.NewEncoder(os.Stdout).Encode(map[string]any{"started": true, "id": request.ID, "path": `C:\Users\Guest\Cage\Projects\` + request.ID}); err != nil {
+	if err = json.NewEncoder(os.Stdout).Encode(map[string]any{"started": true, "id": request.ID, "path": `R:\`}); err != nil {
 		os.Exit(2)
 	}
 	client, err := sftp.NewClientPipe(reader, os.Stdout)
