@@ -183,6 +183,46 @@ internal static class BrowserWindowCapture
         }
         finally { if (previous != IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
     }
+    // CDP bringToFront selects a tab but does not reliably activate its native
+    // window after another application (Desktop) has owned the foreground.
+    // Only explicit viewer activation may raise a window; frame polling must
+    // never do so. Retain the child-process/session/executable and geometry
+    // checks before activation, then resolve a fresh proof in BrowserRpc.
+    internal static void Activate(Process node, JsonObject proof)
+    {
+        var old = SetThreadDpiAwarenessContext(new IntPtr(-4));
+        try
+        {
+            var info = proof["window"] as JsonObject ?? throw new InvalidDataException("browser_window_proof_invalid");
+            var bounds = info["bounds"] as JsonObject ?? throw new InvalidDataException("browser_window_proof_invalid");
+            if (proof["focusAmbiguous"]?.GetValue<bool>() == true || string.IsNullOrEmpty(proof["target"]?.GetValue<string>()))
+                throw new InvalidDataException("browser_target_changed");
+            using var process = Chrome(node);
+            var candidates = new List<IntPtr>();
+            EnumWindows((window, _) =>
+            {
+                if (GetWindowThreadProcessId(window, out var pid) != 0 && pid == process.Id &&
+                    IsWindowVisible(window) && !IsIconic(window) && Class(window) == "Chrome_WidgetWin_1" && Matches(window, bounds))
+                    candidates.Add(window);
+                return true;
+            }, IntPtr.Zero);
+            if (candidates.Count != 1) throw new InvalidDataException("browser_window_unavailable");
+            var target = candidates[0];
+            // Geometry alone cannot authorize raising an unbound owned popup.
+            if (GetWindow(target, 4) != IntPtr.Zero &&
+                (!Windows.TryGetValue(info["windowId"]?.GetValue<int>() ?? 0, out var pin) || pin.Window != target))
+                throw new InvalidDataException("browser_window_unavailable");
+            Validate(new Pin(process, process.StartTime.ToUniversalTime(), process.MainModule!.FileName, target));
+            if (GetAncestor(GetForegroundWindow(), 2) != target && !SetForegroundWindow(target))
+                throw new InvalidDataException("browser_window_unavailable");
+        }
+        finally { if (old != IntPtr.Zero) SetThreadDpiAwarenessContext(old); }
+    }
+    internal static void VerifyActivation(Process node, JsonObject proof)
+    {
+        var view = Resolve(node, proof);
+        if (!IsForeground(view)) throw new InvalidDataException("browser_focus_required");
+    }
     private static View Resolve(Process node,JsonObject proof)
     {
         ValidateNode(node);

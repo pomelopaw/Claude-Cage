@@ -316,6 +316,15 @@ internal static class BrowserRpc
                 if (request["input"] is null) request["input"] = input;
             }
             var result = await Control(request, timeout.Token);
+            if (route == "/activate" && result["error"] is null)
+            {
+                var proof = await Control(new JsonObject { ["method"] = "GET", ["path"] = "/frame-proof" }, timeout.Token);
+                AssertRequestedTab(input, proof);
+                BrowserWindowCapture.Activate(browser!, proof);
+                var current = await Control(new JsonObject { ["method"] = "GET", ["path"] = "/frame-proof" }, timeout.Token);
+                AssertRequestedTab(input, current);
+                BrowserWindowCapture.VerifyActivation(browser!, current);
+            }
             if (route == "/frame" && result["error"] is null)
             {
                 if (result["unchanged"]?.GetValue<bool>() == true)

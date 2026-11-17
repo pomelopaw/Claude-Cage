@@ -58,7 +58,7 @@ try {
     }
     Invoke-BuildTool 'node' @('scripts/check-version.mjs')
     Invoke-BuildTool 'uv' @('run', '--no-project', '--python', '3.13', 'internal/workbench/cache_maintenance_test.py')
-    Invoke-BuildTool 'node' @('--test', 'internal/cage/browser-clipboard.test.mjs', 'scripts/windows-native-bridge.test.mjs')
+    Invoke-BuildTool 'node' @('--test', 'internal/cage/browser-clipboard.test.mjs', 'scripts/windows-native-bridge.test.mjs', 'scripts/guest-os/tests/windows-browser-activation.test.mjs')
     if ($Release) {
         Enter-CiPhase 'Release signing configuration'
         if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { throw 'Release candidates require an explicitly dispatched release workflow.' }
