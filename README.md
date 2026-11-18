@@ -77,7 +77,7 @@ Cage 支持 macOS、Windows 和 Linux：macOS 14+ 的 Apple Silicon Mac、Window
 
 安装包随附工作台和代理核心，无需先安装 Go、Node.js、Docker 或 Clash。首次创建环境时选择客机系统与存储位置，再准备对应的官方系统镜像和开发工具。macOS、Windows 系统按各自许可使用；Cage 不提供系统授权、代理服务或 Claude 账户。
 
-源码与安装包公开，版本说明和校验文件见 [GitHub Releases](https://github.com/Lee-xeo/Claude-Cage/releases)。系统选择、镜像来源与数据保留方式见[客机系统指南](docs/guide/guest-systems.md)。
+源码与安装包公开，版本说明和校验文件见 [GitHub Releases](https://github.com/Lee-xeo/Claude-Cage/releases)。从源码构建工作台需安装 `uv`，平台工具详见[构建说明](.github/CONTRIBUTING.md#工作台构建)。系统选择、镜像来源与数据保留方式见[客机系统指南](docs/guide/guest-systems.md)。
 
 功能以所用构建为准，公开安装包的能力与验证范围以发行说明为准。
 
@@ -129,9 +129,9 @@ macOS 和已签名 Windows 版本支持通过所选代理更新；Windows 未签
 
 本项目仍在快速迭代中，欢迎加入交流群提意见，欢迎社区大佬一起维护
 
-| QQ 群 · 710792821 | 微信 |
+| QQ 群 · 273237690 | 微信 |
 | :---: | :---: |
-| <a href="assets/community-qq.png"><img src="assets/community-qq.png" alt="QQ 群 · 710792821" width="240" /></a> | <a href="www/src/assets/community-wechat.png"><img src="www/src/assets/community-wechat.png" alt="微信" width="240" /></a> |
+| <a href="assets/community-qq.png"><img src="assets/community-qq.png" alt="QQ 群 · 273237690" width="240" /></a> | <a href="www/src/assets/community-wechat.png"><img src="www/src/assets/community-wechat.png" alt="微信" width="240" /></a> |
 
 [Telegram](https://t.me/claude_cage)
 

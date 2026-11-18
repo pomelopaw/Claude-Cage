@@ -309,6 +309,20 @@ func (s *Server) beginGuestInstallMode(w http.ResponseWriter, r *http.Request, i
 				return errors.New("原安装镜像不可读，请恢复其原路径后重试")
 			}
 		}
+		if install.System == guestos.MacOS && install.Source.Host.System == "" && install.SHA256 != "" {
+			// The restore pins the image once the disk exists, so the supplied
+			// digest only needs checking before that point.
+			unstarted, err := guestos.UnstartedInstallation(s.profile, install)
+			if err != nil {
+				return err
+			}
+			if unstarted {
+				s.setMessage("正在校验 macOS 恢复镜像的 SHA-256…")
+				if err := guestos.VerifyMediaDigest(s.operationContext(), install.Media, install.SHA256); err != nil {
+					return err
+				}
+			}
+		}
 		if install.System == guestos.Windows11 {
 			check := guestos.Inspect(s.operationContext())
 			if !check.HostCheckPassed {

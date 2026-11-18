@@ -45,7 +45,10 @@ my $ok = eval {
     push @children, spawn_peer($a,$b,'/usr/libexec/sftp-server','-R','-d',$source);
     # FSKit before macOS 26.4 cannot advertise a read-only mount. The SFTP
     # endpoint stays -R in both modes and remains the authority for writes.
-    my $options = 'slave,'.($server_readonly ? '' : 'ro,').'quiet,backend=fskit,nodev,nosuid,dir_cache=no';
+    # This socketpair fixture lives entirely inside the guest. Mark it local
+    # so testing it does not require access to network volumes over SSH.
+    # Real host project mounts keep their separate folder authorization.
+    my $options = 'slave,'.($server_readonly ? '' : 'ro,').'quiet,backend=fskit,local,nodev,nosuid,dir_cache=no';
     push @children, spawn_peer($b,$a,'/usr/local/libexec/cage-sshfs',":$source",$mount,'-f','-o',$options);
     close $a; close $b;
     for (1..35) {
@@ -57,7 +60,7 @@ my $ok = eval {
     my $user = getpwuid($<);
     my ($flags) = $attached =~ m{^(?:macfuse://[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|/dev/disk[0-9]+s[0-9]+) on \Q$mount\E \(macfuse, ([^\n]+)\)\s*$}i;
     my %options = map { $_ => 1 } split /, /, ($flags // '');
-    die "unexpected mount" unless $options{'fskit'} && $options{'nodev'} && $options{'nosuid'} && ($server_readonly || $options{'read-only'}) && $options{"mounted by $user"};
+    die "unexpected mount" unless $options{'fskit'} && $options{'local'} && $options{'nodev'} && $options{'nosuid'} && ($server_readonly || $options{'read-only'}) && $options{"mounted by $user"};
     open my $read, '<', "$mount/readonly" or die "read-only mount unreadable";
     my $content = do { local $/; <$read> };
     close $read or die "read-only mount unreadable";

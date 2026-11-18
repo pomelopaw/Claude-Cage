@@ -31,6 +31,15 @@ try {
     try {
         Assert-SmokeContract ((Get-WindowsWorkbenchTestBase -WorkbenchProfile) -eq (Join-Path $checkout '_output/workbench-smoke')) 'Local workbench profile must stay in the checkout output directory.'
     } finally { Pop-Location }
+    if ($IsWindows -and $env:LOCALAPPDATA) {
+        # An AppData checkout recreates the old timeout even with the new
+        # checkout-relative default. No files need to be written there.
+        $privateStage = Join-Path $env:LOCALAPPDATA 'Cage-test-checkout/_output/workbench-smoke'
+        $rejected = $false
+        try { Assert-WindowsWorkbenchTestBase $privateStage }
+        catch { $rejected = $_.Exception.Message -match 'Set RUNNER_TEMP' }
+        Assert-SmokeContract $rejected 'Smoke preflight accepted a checkout under AppData.'
+    }
     $report = Join-Path $directory 'smoke.json'
     $fixture = Join-Path $directory 'fixture.json'
     $childScript = Join-Path $directory 'child.ps1'

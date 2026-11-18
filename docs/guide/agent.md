@@ -157,7 +157,7 @@ cage agent call settings.patch --input /private/path/settings-apply.json --wait 
 cage agent call environment.start --input /private/path/guest-choice.json --wait 30m
 ```
 
-已有环境的 `environment.start` 可以不带输入。首次选择的 JSON 字段为 `guest_system`、`clone_key` 或需要的 `media`、`sha256`；只在用户明确接受对应条款时传 `editor_terms:true`。可用系统以 `guest.options` 为准。安装成功且 `guest.options.activate:true` 时调用 `guest.activate`，随后重新调用 `service.start` 并读取状态。激活会让旧后台退出；请求中断时先核对安装状态再决定下一步。
+已有环境的 `environment.start` 可以不带输入。首次选择的 JSON 字段为 `guest_system`、`clone_key` 或需要的 `media`、`sha256`：Windows 的 `media` 是本机 ISO 的绝对路径，必须同时提供它的 `sha256`；macOS 的 `media` 是本机 `.ipsw` 的绝对路径，`sha256` 可选，提供后 Cage 在安装前按它校验镜像，不一致时拒绝安装。只在用户明确接受对应条款时传 `editor_terms:true`。可用系统以 `guest.options` 为准。安装成功且 `guest.options.activate:true` 时调用 `guest.activate`，随后重新调用 `service.start` 并读取状态。激活会让旧后台退出；请求中断时先核对安装状态再决定下一步。
 
 系统首次设置、macOS 权限、Windows 登录或重启需要用户完成时，报告具体需要做的事和恢复查询命令。不要用无限重试掩盖等待用户操作。安装进度在作业的 `setup_progress` 中；`prepared`、安装完成、运行和联网分别检查。
 
