@@ -1,4 +1,5 @@
-import { shortcut, primaryModifier } from "./platform.mjs";
+import { shortcut, primaryModifier, isWindows } from "./platform.mjs";
+import { createAuthorizationTracker, authorizationState, authorizationPollDelay, authorizationCopy } from "./windows-authorization.mjs";
 import logo from "./logo.png";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -88,7 +89,9 @@ function App() {
   const appUpdates = useAppUpdates();
   const [recoveringEditor, setRecoveringEditor] = useState(false);
   const windowVisible = useWindowVisibility();
+  const [authorizationPhase, setAuthorizationPhase] = useState("");
   const windowVisibleRef = useRef(windowVisible);
+  const authorizationTracker = useRef(createAuthorizationTracker());
   windowVisibleRef.current = windowVisible;
   const [serverStatus, setStatus] = useState(null),
     [settings, setSettings] = useState(null),
@@ -703,10 +706,13 @@ function App() {
       clearTimeout(timer);
       polling = true;
       let jobRunning = false;
+      let localWindows = false, waitingAuthorization = false;
       try {
         const next = await api("/status");
         if (!live) return;
         jobRunning = next.job.running;
+        localWindows = next.guest_system === "windows-11";
+        waitingAuthorization = authorizationState(next).pending;
         setStatus(next);
         setStartRequest(pending => pending?.id && pending.id === next.job.id ? null : pending);
         setConnectionError("");
@@ -723,7 +729,7 @@ function App() {
           }
           if (next.job.error) notify(next.job.error);
         }
-        if (next.ready) {
+        if (next.ready && !waitingAuthorization) {
           const supportsBrowser = guestCapability(next, "browser");
           const fetchBrowser = supportsBrowser && !next.environment_update_required && (!browserStreamReady.current || !initialized.current);
           if (!supportsBrowser) setBrowserError("");
@@ -798,7 +804,7 @@ function App() {
         if (live)
           timer = setTimeout(
             poll,
-            jobRunning ? 1200 : windowVisibleRef.current ? 3000 : 15000,
+            authorizationPollDelay({windows:localWindows, pending:waitingAuthorization, visible:windowVisibleRef.current, jobRunning}),
           );
       }
     };
@@ -835,6 +841,39 @@ function App() {
   useEffect(() => {
     if (windowVisible) refreshStatus.current?.();
   }, [windowVisible]);
+  useEffect(() => {
+    const eligible = isWindows && nativeAvailable() && !isRemoteClient() && system === "windows-11";
+    const {pending, resolved} = authorizationState(status);
+    if (pending) setAuthorizationPhase("waiting");
+    else if (resolved) setAuthorizationPhase(previous => previous === "waiting" ? "restoring" : previous);
+    else if (status?.vm_running === false || system !== "windows-11") setAuthorizationPhase("");
+    const operation = authorizationTracker.current.update({eligible, pending,
+      resolved, stopped: status?.vm_running === false && !pending});
+    if (operation === "close") setBrowserError("");
+    if (operation || pending) native("windowsAuthorization", {operation: operation || "update", reason: status?.guest_attention}).catch(error => {
+      if (operation === "open") notify(error.message);
+    });
+  }, [status, system]);
+  function openWindowsConsole() {
+    const {pending, resolved} = authorizationState(status);
+    if (isWindows && nativeAvailable()) {
+      authorizationTracker.current.update({eligible:true, pending, resolved, manual:true});
+      return native("windowsAuthorization", {operation:"open", reason:status?.guest_attention});
+    }
+    return api("/environment/windows-console", {});
+  }
+  useEffect(() => {
+    if (authorizationPhase !== "restoring") return;
+    // Do not conceal an unrelated persistent failure after the recovery grace.
+    const timer = setTimeout(() => setAuthorizationPhase(""), 10000);
+    return () => clearTimeout(timer);
+  }, [authorizationPhase]);
+  useEffect(() => {
+    if (authorizationPhase === "restoring" && status?.ready && !busy) {
+      cliSessions.refresh();
+      if (!desktopOpen) setAuthorizationPhase("");
+    }
+  }, [authorizationPhase, status?.ready, busy, desktopOpen]);
   useEffect(() => {
     if (!settings || !status || fatal || connectionError || launchAcknowledged.current || !nativeAvailable()) return;
     // Effects run after the workbench render commits. HTML navigation alone
@@ -1459,7 +1498,7 @@ function App() {
             tabs={displayTabs}
             sessions={cliSessions.sessions.map(session => ({ ...session,
               claudeAccountNumber: claudeNumbers.get(session.account_id) }))}
-            sessionError={cliSessions.error}
+            sessionError={authorizationPhase ? "" : cliSessions.error}
             sessionRefreshing={cliSessions.loading}
             onSessionRefresh={cliSessions.refresh}
             onProjectRefresh={projectFilesCached ? refreshProjectFiles : undefined}
@@ -1521,7 +1560,7 @@ function App() {
             {browserAvailable && <button disabled={!status.ready || busy} onClick={() => openBrowser()}>打开浏览器</button>}
             <button disabled={!status.ready || busy} onClick={() => createTerminal(status.workspace || "", "shell").catch(e => notify(e.message))}>打开 PowerShell</button>
           </div>}
-          {browserAvailable && browserError && running && !connectionError && <div className="connection-banner" role="status">
+          {browserAvailable && browserError && running && !connectionError && !authorizationPhase && <div className="connection-banner" role="status">
             <span>客机浏览器暂时无法连接。{browserError}</span>
             <button onClick={() => refreshStatus.current?.()}>重试</button>
           </div>}
@@ -1563,11 +1602,20 @@ function App() {
           )}
           <main className={`workspace ${split ? "workspace-split" : ""}`} ref={workspaceBox} hidden={Boolean(managementPage)}
             style={{ "--split-left": `${100 * (dualBrowser && nativeSplit?.fraction || 0.5)}%` }}>
+            {authorizationPhase && !connectionError && <div className="windows-authorization-notice" role="status">
+              <Shield size={30} />
+              <h3>{authorizationPhase === "waiting" ? authorizationCopy(status.guest_attention).title : "提示已处理，正在恢复画面…"}</h3>
+              <p>{authorizationPhase === "waiting" ? authorizationCopy(status.guest_attention).body : "无需重启 Cage。"}</p>
+              {authorizationPhase === "waiting" && !isRemoteClient() && <button className="primary" onClick={() => openWindowsConsole().catch(error => notify(error.message))}>查看客机提示</button>}
+            </div>}
             {dropSide && <div aria-hidden="true" className={`split-drop split-${dropSide}`}>{dropSide === "left" ? "放到左侧" : "放到右侧"}</div>}
             {!storageRecovery && desktopOpen && macGuest && <MacOSAppWindow key="claude-desktop" uploads={desktopFiles.uploads} keyboard={status.keyboard} remoteRef={remote}
               onStatus={notify} onFallback={(text, message) => setTransfer({ text, message })} visible={!settingsOpen && !managementPage} onConfirm={confirm}
               sidebarCollapsed={sidebarCollapsed} onExpand={() => persist("cage-sidebar-collapsed", false, setSidebarCollapsed)} />}
             {!storageRecovery && desktopOpen && !macGuest && <ClaudeDesktop
+              authorizationPhase={authorizationPhase}
+              onOpenWindowsConsole={!isRemoteClient() && system === "windows-11" ? () => openWindowsConsole().catch(error => notify(error.message)) : undefined}
+              onAuthorizationRestored={() => setAuthorizationPhase("")}
               uploads={desktopFiles.uploads}
               onProjectOpened={() => refreshStatus.current?.()}
               status={status} visible={!settingsOpen && !managementPage} remoteRef={remote}

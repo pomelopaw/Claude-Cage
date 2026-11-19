@@ -116,6 +116,9 @@ export function DesktopToolbar({ desktop, platform, title = "Claude Desktop", zo
 }
 
 export function ClaudeDesktop({
+  authorizationPhase = "",
+  onAuthorizationRestored,
+  onOpenWindowsConsole,
   uploads = [],
   status,
   onProjectOpened,
@@ -178,7 +181,7 @@ export function ClaudeDesktop({
     }
   };
   useEffect(() => {
-    if (!available || !screenVisible || !status.vm_running || status.job?.running) return;
+    if (!available || !screenVisible || !status.vm_running || status.job?.running || authorizationPhase === "waiting") return;
     let disposed = false;
     let timer;
     const poll = async () => {
@@ -196,7 +199,8 @@ export function ClaudeDesktop({
       disposed = true;
       clearTimeout(timer);
     };
-  }, [available, screenVisible, status.vm_running, status.job?.running]);
+  }, [available, screenVisible, status.vm_running, status.job?.running, authorizationPhase]);
+  useEffect(() => { if (authorizationPhase) setStatusError(""); }, [authorizationPhase]);
   useEffect(() => {
     if (!jobID || status.job?.id !== jobID || status.job.running) return;
     setJobID("");
@@ -226,11 +230,12 @@ export function ClaudeDesktop({
       />}
       <DesktopToolbar desktop={desktop} platform={automatic ? "Windows" : "Linux"} zoom={zoom} setZoom={setZoom} automatic={automatic}
         onConfirm={onConfirm} onStop={() => run("stop")} busy={busy || !available} refresh={() => refresh()} sidebarCollapsed={sidebarCollapsed} onExpand={onExpand}>
+        {onOpenWindowsConsole && <button className="quiet-button" disabled={!status.vm_running} onClick={onOpenWindowsConsole}>系统／应用弹窗</button>}
         {desktop?.installed && !status.guest_system?.startsWith("windows") && <button className="quiet-button" disabled={busy} onClick={async () => {
           if (!desktop.running || await onConfirm({ title: "更新 Claude Desktop？", body: "请先保存应用内的工作。更新会关闭 Claude Desktop，从官方软件源安装可用版本，再重新打开；登录资料继续保留。", confirm: "更新应用" })) run("update");
         }}>更新应用</button>}
       </DesktopToolbar>
-      {(error || statusError || desktop?.failed) && (
+      {!authorizationPhase && (error || statusError || desktop?.failed) && (
         <div className="connection-banner" role="alert">
           <SafetyMessage message={error || statusError || (desktop?.failure_reason === "oom-kill"
             ? "环境内存不足，Claude Desktop 已被系统关闭。请在设置中检查计算资源后重新打开。"
@@ -257,6 +262,8 @@ export function ClaudeDesktop({
           </div>
         ) : desktop?.running && status.vm_running ? (
           <RemoteView
+            paused={authorizationPhase === "waiting"}
+            onConnected={authorizationPhase === "restoring" ? onAuthorizationRestored : undefined}
             ref={remoteRef}
             desktop
             zoom={zoom}

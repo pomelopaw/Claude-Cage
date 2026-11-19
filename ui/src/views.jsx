@@ -30,7 +30,7 @@ import "@xterm/xterm/css/xterm.css";
 const terminalAccountRequest = (path, options) => api("/cli" + path, options.body);
 
 export const RemoteView = forwardRef(function RemoteView(
-  { visible, focused = true, keyboard, guestPlatform = "linux", systemClipboard = true, tabId, copyScope = tabId, onStatus, onFallback, desktop = false, zoom = 1 },
+  { visible, focused = true, keyboard, guestPlatform = "linux", systemClipboard = true, tabId, copyScope = tabId, onStatus, onFallback, desktop = false, zoom = 1, paused = false, onConnected },
   ref,
 ) {
   const windowVisible = useWindowVisibility();
@@ -40,7 +40,7 @@ export const RemoteView = forwardRef(function RemoteView(
     input = useRef(),
     current = useRef({ visible, keyboard, onStatus, onFallback }),
     displayResize = useRef();
-  current.current = { visible: screenVisible && focused, keyboard, guestPlatform, systemClipboard, tabId, onStatus, onFallback, zoom };
+  current.current = { visible: screenVisible && focused && !paused, keyboard, guestPlatform, systemClipboard, tabId, onStatus, onFallback, zoom, onConnected };
   const failures = useRef(0);
   const [connection, setConnection] = useState("connecting"),
     [attempt, setAttempt] = useState(0),
@@ -61,7 +61,7 @@ export const RemoteView = forwardRef(function RemoteView(
       onFallback(input.current?.text() || "", "可在此使用本机复制、粘贴。"),
   }));
   useEffect(() => {
-    if (!screenVisible) return;
+    if (!screenVisible || paused) return;
     const container = box.current;
     if (!container) return;
     let disposed = false,
@@ -118,6 +118,7 @@ export const RemoteView = forwardRef(function RemoteView(
           if (disposed) return;
           failures.current = 0;
           setConnection("connected");
+          current.current.onConnected?.();
           sizeSync = displaySizeSync(
             async (size) => {
               const reply = await api(desktop ? "/claude-desktop/resize" : "/browser/resize", size);
@@ -266,7 +267,7 @@ export const RemoteView = forwardRef(function RemoteView(
       client?.disconnect();
       rfb.current = null;
     };
-  }, [attempt, screenVisible, desktop]);
+  }, [attempt, screenVisible, desktop, paused]);
   useEffect(() => {
     if (focused && screenVisible && connection === "connected") {
       const t = setTimeout(() => { if (!document.activeElement?.closest(".chrome")) rfb.current?.focus(); }, 80);

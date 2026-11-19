@@ -12,6 +12,7 @@ internal static class SelfTest
     internal static void Run()
     {
         ReceiptPublication();
+        ApplicationAttention();
         var driver = Path.Combine(AppContext.BaseDirectory, "wintun.dll");
         if (File.Exists(driver))
         {
@@ -24,6 +25,15 @@ internal static class SelfTest
             finally { NativeLibrary.Free(library); }
         }
         var vm = Guid.NewGuid(); var endpoint = new HyperVEndPoint(vm, Protocol.Service);
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        Assert(WindowsSystemAttention.Matches(Path.Combine(windows, "System32", "consent.exe"), ""));
+        // A normal security dashboard must not suspend the embedded desktop.
+        Assert(!WindowsSystemAttention.Matches(Path.Combine(windows, "SystemApps", "SecHealthUI.exe"), "Windows Security"));
+        Assert(!WindowsSystemAttention.Matches(Path.Combine(windows, "System32", "rundll32.exe"), "Windows Defender Firewall", "CabinetWClass"));
+        Assert(WindowsSystemAttention.Matches(Path.Combine(windows, "System32", "rundll32.exe"), "Windows Defender Firewall", "#32770"));
+        Assert(WindowsSystemAttention.Matches(Path.Combine(windows, "System32", "CredentialUIBroker.exe"), "", "Credential Dialog Xaml Host"));
+        Assert(!WindowsSystemAttention.Matches(Path.Combine(Path.GetTempPath(), "consent.exe"), "Windows Security"));
+        Assert(!WindowsSystemAttention.Matches(Path.Combine(windows, "System32", "notepad.exe"), "Notes"));
         Assert(WindowsSystemSettings.BrowserLanguage(new JsonObject { ["locale"]="zh_CN.UTF-8",["browser_language"]="en-GB" })=="en-GB");
         Reject(()=>WindowsSystemSettings.BrowserLanguage(new JsonObject { ["browser_language"]="en-US';exit" }));
         Reject(()=>WindowsSystemSettings.BrowserLanguage(new JsonObject { ["locale"]="en_US.UTF-8" }));
@@ -85,6 +95,35 @@ internal static class SelfTest
         browserFrame["target"] = "resized-native-window";
         Assert(BrowserWindowCapture.FrameReply(browserFrame, menu["sequence"]!.GetValue<string>())["unchanged"] is null);
         CryptographicOperations.ZeroMemory(secret);
+    }
+
+    private static void ApplicationAttention()
+    {
+        var modal = new WindowsSystemAttention.WindowMetadata(true, true, true, true, "#32770", 0x80000000, 0, ["Static", "Button"], [1, 2]);
+        Assert(WindowsSystemAttention.Classify(modal) == "windows_application_prompt");
+        Assert(WindowsSystemAttention.Classify(modal with { SameSession = false }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { Visible = false }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { Enabled = false }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { OwnerDisabled = false }) == "");
+        foreach (var cls in new[] { "#32768", "tooltips_class32", "SysShadow", "IME" })
+            Assert(WindowsSystemAttention.Classify(modal with { ClassName = cls }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { ExStyle = 0x08000000 }) == "");
+        foreach (var cls in new[] { "DUIViewWndClassName", "SHELLDLL_DefView", "SHBrowseForFolder ShellNameSpace Control" })
+            Assert(WindowsSystemAttention.Classify(modal with { ChildClasses = [cls] }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { ChildClasses = ["Edit", "ComboBox"], ChildIds = [0x480, 0x470] }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { ChildClasses = ["ComboBox", "ComboBox"], ChildIds = [0x47c, 0x470] }) == "");
+        Assert(WindowsSystemAttention.Classify(modal with { ClassName = "CustomPermissionDialog" }) == "windows_application_prompt");
+        var main = modal with { OwnerDisabled = false, ClassName = "MainWindow", Style = 0 };
+        // Reordering represents foreground changes: a still blocking modal remains pending.
+        Assert(WindowsSystemAttention.SelectReason([main, modal]) == "windows_application_prompt");
+        Assert(WindowsSystemAttention.SelectReason([modal, main]) == "windows_application_prompt");
+        Assert(WindowsSystemAttention.SelectReason([main, modal, modal with { Security = true }]) == "windows_security_prompt");
+        Assert(WindowsSystemAttention.SelectReason([main, modal with { OwnerDisabled = false }]) == "");
+        Assert(WindowsSystemAttention.SelectReason([main, modal, modal with { Visible = false }]) == "windows_application_prompt");
+        Assert(WindowsSystemAttention.SelectReason([main]) == "");
+        Assert(WindowsSystemAttention.ResolveScan("windows_application_prompt", "", false) == "windows_application_prompt");
+        Assert(WindowsSystemAttention.ResolveScan("windows_application_prompt", "", true) == "");
+        Assert(WindowsSystemAttention.ResolveScan("windows_application_prompt", "windows_security_prompt", false) == "windows_security_prompt");
     }
 
     private static void ReceiptPublication()

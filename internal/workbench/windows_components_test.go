@@ -65,6 +65,30 @@ func TestWindowsStatusRefreshUsesFixedPairedStatusTransport(t *testing.T) {
 		t.Fatalf("actual status route: %d", w.Code)
 	}
 	wait()
+	// UAC makes the overall environment unready. Its paired GUI status must
+	// still be refreshed, without waiting for network recovery to complete.
+	s.mu.Lock()
+	s.ready = false
+	s.windowsState.Reason = "requires_system_attention"
+	s.windowsState.Available = false
+	s.windowsState.ComponentsChecked = time.Time{}
+	s.mu.Unlock()
+	s.refreshWindowsComponents()
+	wait()
+	s.mu.Lock()
+	guiRecovered := s.windowsState.Available && s.windowsState.Reason == ""
+	s.mu.Unlock()
+	if !guiRecovered {
+		t.Fatal("authorization recovery waited for global environment readiness")
+	}
+	recovered := windowsBrowserRequestForTest(s, http.MethodGet, "/api/status", nil)
+	var recoveredView map[string]any
+	if json.Unmarshal(recovered.Body.Bytes(), &recoveredView) != nil || recoveredView["guest_gui_ready"] != true || recoveredView["ready"] != false {
+		t.Fatal("fresh paired GUI status did not resolve authorization independently")
+	}
+	s.mu.Lock()
+	s.ready = true
+	s.mu.Unlock()
 	s.mu.Lock()
 	available := s.windowsCapabilitiesLocked()["available"].(map[string]bool)
 	session := s.windowsState.Session
@@ -82,8 +106,28 @@ func TestWindowsStatusRefreshUsesFixedPairedStatusTransport(t *testing.T) {
 	wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.windowsState.VMID != binding.VMID.String() || s.windowsState.Session != "component-fixture" || s.windowsState.Components["desktop"].Ready || s.windowsState.Components["desktop"].Reason != "agent_status_unavailable" {
+	if s.windowsState.ComponentsVerified || s.windowsState.VMID != binding.VMID.String() || s.windowsState.Session != "component-fixture" || s.windowsState.Components["desktop"].Ready || s.windowsState.Components["desktop"].Reason != "agent_status_unavailable" {
 		t.Fatal("wrong VM status gained readiness or replaced authenticated identity")
+	}
+}
+
+func TestWindowsComponentReplyCannotClearNewerUACInSameSession(t *testing.T) {
+	binding := &guestos.WindowsProfile{Version: 1, VMID: uuid.New(), GUIUserSID: "S-1-5-21-1-2-3-1001"}
+	before := windowsGuestState{Session: "unchanged-agent-process", Available: true, ComponentsChecked: time.Now().Add(-time.Second)}
+	s := &Server{windowsGuest: binding, windowsState: before}
+	// The health monitor detects UAC while the earlier ready reply is in flight.
+	s.windowsState.Available = false
+	s.windowsState.Reason = "requires_system_attention"
+	s.windowsState.ComponentsChecked = time.Now()
+	s.windowsState.ComponentsRefreshing = true // belongs to a newer request
+	s.applyWindowsComponentReply(binding, before, windowsGuestState{Session: before.Session, Available: true}, nil)
+	if s.windowsState.Reason != "requires_system_attention" || s.windowsState.Available || !s.windowsState.ComponentsRefreshing {
+		t.Fatal("pre-UAC reply closed current authorization or released newer refresh")
+	}
+	// A probe begun after that attention state may resolve it normally.
+	s.applyWindowsComponentReply(binding, s.windowsState, windowsGuestState{Session: before.Session, Available: true}, nil)
+	if !s.windowsState.Available || s.windowsState.Reason != "" || !s.windowsState.ComponentsVerified || s.ready {
+		t.Fatal("fresh GUI recovery did not resolve attention independently")
 	}
 }
 

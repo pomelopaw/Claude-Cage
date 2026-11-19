@@ -1,5 +1,21 @@
 using Cage.Windows;
 
+#if WINDOWS
+if (args is ["--grant-console-access", var consoleVM, var consoleOwner]) {
+    Environment.Exit(WindowsConsoleAccess.Run(consoleVM, consoleOwner)); return;
+}
+if (args is ["--console-preview"]) {
+    var preview = new Thread(() => {
+        Application.EnableVisualStyles();
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using var window = new WindowsAuthorization(WindowsConsoleTarget.Load());
+        window.ShowInTaskbar = true;
+        Application.Run(window);
+    });
+    preview.SetApartmentState(ApartmentState.STA); preview.Start(); preview.Join(); return;
+}
+#endif
+
 if (args is ["smoke-wait", var smokeRelease])
 {
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -31,6 +47,7 @@ if (args is ["prepare-update", "--json", "--stop"])
 
 #if WINDOWS
 NativeInputTests.Run();
+WindowsConsoleTests.Run();
 #endif
 
 var assertions = 0;

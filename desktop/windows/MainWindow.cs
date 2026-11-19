@@ -8,6 +8,7 @@ internal sealed class MainWindow : Form
 {
     private WebView2 web = new() { Dock = DockStyle.Fill, Visible = false };
     private readonly NativeInput nativeInput;
+    private WindowsAuthorization? authorization;
     private readonly Label message = new() { AutoSize = true, MaximumSize = new Size(720, 0), Text = "正在启动 Cage 工作台…", Margin = new Padding(12) };
     private readonly FlowLayoutPanel status = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(48), WrapContents = false };
     private readonly Button retry = new() { Text = "重试连接", AutoSize = true, Visible = false };
@@ -358,6 +359,24 @@ internal sealed class MainWindow : Form
             object? result;
             switch (request.Text("action"))
             {
+                case "windowsAuthorization":
+                    if (request.Text("operation") == "close") {
+                        authorization?.Close(); authorization = null; result = new { opened = false }; break;
+                    }
+                    if (request.Text("operation") == "update") {
+                        if (authorization is { IsDisposed: false }) authorization.SetAttention(request.Text("reason"));
+                        result = new { opened = authorization is { IsDisposed: false, Visible: true } }; break;
+                    }
+                    if (request.Text("operation") != "open") throw new InvalidDataException("未知的 Windows 客机窗口操作");
+                    // The web request cannot supply a target VM, executable, or credentials.
+                    var consoleVM = WindowsConsoleTarget.Load();
+                    authorization = WindowsAuthorization.ForTarget(authorization, consoleVM);
+                    authorization.SetAttention(request.Text("reason"));
+                    if (!authorization.Visible) {
+                        authorization.Show(this);
+                    }
+                    else authorization.Activate();
+                    result = new { opened = true }; break;
                 case "remoteInput":
                     var accepted = nativeInput.ProcessRequest(request, web, web.ZoomFactor, out var returnedFocus);
                     result = request.TryGetProperty("returnFocus", out var restore) && restore.ValueKind == JsonValueKind.True

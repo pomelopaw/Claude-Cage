@@ -13,6 +13,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--grant-console-access", var vm, var ownerSid]) return WindowsConsoleAccess.Run(vm, ownerSid);
         if (args is ["--install-update"]) return UpdateInstaller.Run().GetAwaiter().GetResult();
         if (args is ["--smoke-test", var output] && Path.IsPathFullyQualified(output))
         {

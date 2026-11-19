@@ -17,9 +17,17 @@ func (s *Server) refreshWindowsComponents() {
 	s.mu.Lock()
 	binding := s.windowsGuest
 	state := s.windowsState
-	if binding == nil || s.closing || !s.ready || state.Version != 1 || state.OS != "windows" ||
+	attention := windowsSystemAttention(state.Reason)
+	interval := time.Second
+	if attention {
+		interval = 500 * time.Millisecond
+	}
+	if binding != nil && binding.Remote() {
+		interval = 5 * time.Second
+	}
+	if binding == nil || s.closing || (!s.ready && !attention) || state.Version != 1 || state.OS != "windows" ||
 		state.VMID != binding.VMID.String() || state.SID != binding.GUIUserSID ||
-		state.ComponentsRefreshing || time.Since(state.ComponentsChecked) < 5*time.Second {
+		state.ComponentsRefreshing || time.Since(state.ComponentsChecked) < interval {
 		s.mu.Unlock()
 		return
 	}
@@ -41,36 +49,44 @@ func (s *Server) refreshWindowsComponents() {
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		// A newer attach/reconnect owns its own status. An older reply cannot
-		// overwrite its session or release a newer refresh slot.
-		if s.closing || s.windowsGuest != binding || s.windowsState.Session != state.Session {
-			return
-		}
-		s.windowsState.ComponentsRefreshing = false
-		s.windowsState.ComponentsChecked = time.Now()
-		if binding.Remote() {
-			if err != nil {
-				s.windowsState.Available = false
-				return
-			}
-			s.windowsState = report
-			return
-		}
-		if !s.ready {
-			return
-		}
-		if err != nil {
-			for name, component := range s.windowsState.Components {
-				component.Ready, component.Reason = false, "agent_status_unavailable"
-				s.windowsState.Components[name] = component
-			}
-			return
-		}
-		s.windowsState.Components = report.Components
-		s.windowsState.Capabilities = report.Capabilities
-		s.windowsState.Browser = report.Browser
-		s.windowsState.Available, s.windowsState.Reason, s.windowsState.Session = report.Available, report.Reason, report.Session
+		s.applyWindowsComponentReply(binding, state, report, err)
 	}()
+}
+
+// The caller holds s.mu. The snapshot belongs to the request, not its arrival.
+func (s *Server) applyWindowsComponentReply(binding *guestos.WindowsProfile, state, report windowsGuestState, err error) {
+	// A newer attach/reconnect owns its own status. An older reply cannot
+	// overwrite its session or release a newer refresh slot.
+	if s.closing || s.windowsGuest != binding || s.windowsState.Session != state.Session ||
+		!s.windowsState.ComponentsChecked.Equal(state.ComponentsChecked) || s.windowsState.Reason != state.Reason || s.windowsState.Available != state.Available {
+		return
+	}
+	s.windowsState.ComponentsRefreshing = false
+	s.windowsState.ComponentsChecked = time.Now()
+	if binding.Remote() {
+		if err != nil {
+			s.windowsState.Available = false
+			return
+		}
+		s.windowsState = report
+		return
+	}
+	if !s.ready && !windowsSystemAttention(s.windowsState.Reason) {
+		return
+	}
+	if err != nil {
+		s.windowsState.ComponentsVerified = false
+		for name, component := range s.windowsState.Components {
+			component.Ready, component.Reason = false, "agent_status_unavailable"
+			s.windowsState.Components[name] = component
+		}
+		return
+	}
+	s.windowsState.Components = report.Components
+	s.windowsState.ComponentsVerified = true
+	s.windowsState.Capabilities = report.Capabilities
+	s.windowsState.Browser = report.Browser
+	s.windowsState.Available, s.windowsState.Reason, s.windowsState.Session = report.Available, report.Reason, report.Session
 }
 
 func readWindowsComponentStatus(ctx context.Context, profile string) (windowsGuestState, error) {

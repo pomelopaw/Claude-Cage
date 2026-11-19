@@ -16,6 +16,11 @@ import (
 )
 
 func TestWindowsHostRepairPreservesProcessOutput(t *testing.T) {
+	// Simulate an incompatible module search path inherited from pwsh.
+	poisonedModules := t.TempDir()
+	t.Setenv("PSModulePath", poisonedModules)
+	t.Setenv("CAGE_MAINTENANCE_POISONED_MODULES", poisonedModules)
+	t.Setenv("CAGE_MAINTENANCE_FIXTURE", "preserved")
 	profile := t.TempDir()
 	if err := BindWindowsProfile(profile, windowsBindingFixture(profile)); err != nil {
 		t.Fatal(err)
@@ -24,6 +29,9 @@ func TestWindowsHostRepairPreservesProcessOutput(t *testing.T) {
 	script := `param([string]$Profile,[string]$ManifestPath,[string]$ManifestSHA256,[switch]$HostOnly)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+if ($env:CAGE_MAINTENANCE_FIXTURE -ne 'preserved') { exit 39 }
+$expectedModules=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\Modules'
+if (($env:PSModulePath -split ';') -contains $env:CAGE_MAINTENANCE_POISONED_MODULES -or ($env:PSModulePath -split ';') -notcontains $expectedModules) { exit 40 }
 if (!$HostOnly -or (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash -ne $ManifestSHA256) { exit 38 }
 Write-Output 'repair-fixture-stdout'
 [Console]::Error.WriteLine('repair-fixture-service-registration-failed token=repair-fixture-secret')

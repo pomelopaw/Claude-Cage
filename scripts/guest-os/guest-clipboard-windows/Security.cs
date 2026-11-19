@@ -107,27 +107,34 @@ internal static class SessionGuard
         }
         catch { return false; }
     }
-    internal static bool Available()
+    internal static bool Available() => UnavailableReason() == "";
+    internal static string UnavailableReason()
     {
         // Process identity is fixed at startup. Session and input-desktop
         // availability are still queried for each operation below.
-        if (!Environment.UserInteractive || ProcessIdentity.Session == 0 || !ProcessIdentity.Unprivileged) return false;
+        if (!Environment.UserInteractive || ProcessIdentity.Session == 0 || !ProcessIdentity.Unprivileged) return "requires_gui_login";
         int session = ProcessIdentity.Session;
         // A locked Windows 11 console can remain WTSActive and its user
         // process can still see Default. Require explicit OS unlock as well.
-        if (!WTSQuerySessionInformation(IntPtr.Zero, session, 25, out var state, out int bytes)) return false; // WTSSessionInfoEx
+        if (!WTSQuerySessionInformation(IntPtr.Zero, session, 25, out var state, out int bytes)) return "requires_gui_login"; // WTSSessionInfoEx
         try
         {
             // WTSINFOEXW.Data is 8-byte aligned on the win-x64 guest. Read
             // only the level-1 SessionId, SessionState and SessionFlags prefix.
             if (state == IntPtr.Zero || bytes < 20 || Marshal.ReadInt32(state) != 1 ||
                 Marshal.ReadInt32(state, 8) != session || Marshal.ReadInt32(state, 12) != 0 ||
-                Marshal.ReadInt32(state, 16) != 1) return false; // WTS_SESSIONSTATE_UNLOCK
+                Marshal.ReadInt32(state, 16) != 1) return "requires_gui_login"; // WTS_SESSIONSTATE_UNLOCK
         }
         finally { WTSFreeMemory(state); }
         var desktop = OpenInputDesktop(0, false, 1);
-        if (desktop == IntPtr.Zero) return false;
-        try { var name = new char[256]; return GetUserObjectInformation(desktop, 2, name, name.Length * 2, out _) && new string(name).TrimEnd('\0') == "Default"; }
+        // The account is unlocked. An inaccessible or non-default input desktop
+        // needs native console attention, rather than another account login.
+        if (desktop == IntPtr.Zero) return "requires_system_attention";
+        try {
+            var name = new char[256];
+            if (!GetUserObjectInformation(desktop, 2, name, name.Length * 2, out _)) return "requires_gui_login";
+            return new string(name).TrimEnd('\0') == "Default" ? "" : "requires_system_attention";
+        }
         finally { CloseDesktop(desktop); }
     }
     internal static void Assert() { if (!Available()) throw new InvalidOperationException("requires_gui_login"); }

@@ -405,6 +405,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/client-share", s.guestClientShare)
 	mux.HandleFunc("GET /api/projects/client-share", s.guestClientShare)
 	mux.HandleFunc("GET /api/environment/versions", s.environmentVersions)
+	mux.HandleFunc("POST /api/environment/windows-console", s.openWindowsConsole)
 	mux.HandleFunc("POST /api/environment/device-check", s.deviceCheck)
 	mux.HandleFunc("GET /api/environment/guest-profile", s.guestProfileOptions)
 	mux.HandleFunc("POST /api/environment/guest-profile/preview", s.guestProfileOptions)
@@ -713,6 +714,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.windowsGuest != nil {
 		view["guest_system"] = guestos.Windows11
+		if !s.windowsGuest.Remote() {
+			// A verified GUI reply can resolve UAC before network rechecks finish.
+			view["guest_gui_ready"] = s.windowsState.ComponentsVerified && s.windowsState.Available &&
+				time.Since(s.windowsState.ComponentsChecked) < 3*time.Second
+		}
+		if !s.windowsGuest.Remote() && windowsSystemAttention(s.windowsState.Reason) {
+			view["guest_attention"] = s.windowsState.Reason
+		}
 		if s.windowsGuest.Remote() {
 			view["guest_system"] = "windows-remote"
 			view["workspace"] = s.windowsState.Home

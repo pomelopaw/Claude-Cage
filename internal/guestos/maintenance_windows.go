@@ -37,7 +37,11 @@ func WindowsMaintenanceCommand(ctx context.Context, profile, kit, manifest strin
 	if tools {
 		args = append(args, "-Tools")
 	}
-	return exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), args...), nil
+	command := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), args...)
+	// pwsh may supply incompatible modules. This fixed Windows PowerShell
+	// maintenance entry point must resolve cmdlets from its own system modules.
+	command.Env = append(os.Environ(), "PSModulePath="+filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"))
+	return command, nil
 }
 
 // RepairWindowsHostManager uses the existing UAC maintenance entry point. It

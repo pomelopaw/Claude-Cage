@@ -36,6 +36,7 @@ type windowsGuestState struct {
 	Running              bool                             `json:"-"`
 	ComponentsChecked    time.Time                        `json:"-"`
 	ComponentsRefreshing bool                             `json:"-"`
+	ComponentsVerified   bool                             `json:"-"`
 }
 
 type windowsComponentState struct {
@@ -62,7 +63,7 @@ type windowsBrowserState struct {
 }
 
 func windowsWorkbenchRoute(path string) bool {
-	if nativeWorkbenchRoute(path) || path == "/api/claude-desktop" {
+	if nativeWorkbenchRoute(path) || path == "/api/claude-desktop" || path == "/api/environment/windows-console" {
 		return true
 	}
 	return strings.HasPrefix(path, "/api/claude-desktop/") || strings.HasPrefix(path, "/api/safety/") || strings.HasPrefix(path, "/api/settings/") || strings.HasPrefix(path, "/api/input/")
@@ -123,6 +124,7 @@ func (s *Server) windowsStatus(ctx context.Context) (windowsGuestState, error) {
 		return state, errors.New("Windows 客机或图形用户身份不匹配")
 	}
 	state.ComponentsChecked = time.Now()
+	state.ComponentsVerified = true
 	if binding.Remote() {
 		if state.Execution != "appcontainer-headless" || state.ProcessSession != 0 ||
 			!strings.HasPrefix(state.SandboxSID, "S-1-15-2-") || !filepath.IsAbs(state.Home) ||
@@ -132,6 +134,12 @@ func (s *Server) windowsStatus(ctx context.Context) (windowsGuestState, error) {
 		state.Running = true
 	}
 	if !state.Available {
+		if state.Reason == "requires_gui_login" {
+			return state, errWindowsLoginRequired
+		}
+		if windowsSystemAttention(state.Reason) {
+			return state, errors.New("Windows 系统或应用提示等待处理，请在 Cage 中打开系统／应用弹窗完成操作")
+		}
 		return state, errWindowsLoginRequired
 	}
 	return state, nil

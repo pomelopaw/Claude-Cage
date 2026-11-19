@@ -108,7 +108,8 @@ internal static class Program
     static JsonObject Status(ClipboardAgent agent, Guid vm, string sid)
     {
         var status = agent.Hello(); status["vm_id"] = vm.ToString("D"); status["gui_user_sid"] = sid;
-        status["reason"] = SessionGuard.Available() ? "" : "requires_gui_login";
+        var reason = SessionGuard.UnavailableReason();
+        status["reason"] = reason == "" ? WindowsSystemAttention.PendingReason() : reason;
         status["capabilities"] = JsonSerializer.SerializeToNode(GuestOperations.Capabilities());
         status["setup_account_disabled"] = SetupAccount.Disabled();
         var browser=BrowserRpc.Status();status["browser"]=browser;
