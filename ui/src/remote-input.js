@@ -13,7 +13,8 @@ import {
 export function installRemoteInput(
   transport,
   container,
-  { mode, systemClipboard = () => true, onStatus, onFallback, isActive,
+  { mode, systemClipboard = () => true, clipboardActive = () => window.cageSharedClipboardActive,
+    syncClipboard = () => window.cageSyncClipboard(), onStatus, onFallback, isActive,
     insertText, insertComposition, caretRect, surface, inputLabel = "Cage 网页输入", tabId: getTargetId = () => "", pasteContent, preparePaste, setCopyContext, copyText },
 ) {
   const listeners = [],
@@ -63,7 +64,7 @@ export function installRemoteInput(
     isActive() &&
     (nativeOwned || container.contains(document.activeElement) ||
       document.activeElement === target);
-  const sharedClipboard = () => systemClipboard() && window.cageSharedClipboardActive;
+  const sharedClipboard = () => systemClipboard() && clipboardActive();
   const shortcutModifier = () => {
     return physical.has("ControlRight") ? [0xffe4, "ControlRight"] : [0xffe3, "ControlLeft"];
   };
@@ -539,7 +540,7 @@ export function installRemoteInput(
       say("正在粘贴…");
       return transport.runKeyAction(async sendKey => {
         const before = await caretRect?.();
-        await window.cageSyncClipboard();
+        await syncClipboard();
         const after = await caretRect?.();
         if (disposed || !isActive() || id !== getTargetId() ||
             (before?.available && (!after?.available || before.context !== after.context))) {
@@ -789,6 +790,13 @@ export function installRemoteInput(
     readAndPaste,
     paste,
     text: () => lastText,
+    deactivate() {
+      focusHandoff = null;
+      if (composing && compositionSession) queueComposition({mode:'cancel'});
+      resetComposition();
+      deactivateNative();
+      release();
+    },
     edit(action) {
       if (composing) return false;
       if (action === "copy") copy();

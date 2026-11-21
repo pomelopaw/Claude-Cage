@@ -17,6 +17,40 @@ clipboard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(clipboard)
 
 
+class DesktopSelectionTests(unittest.TestCase):
+    def test_scoped_bridge_never_adds_other_displays(self):
+        with patch.object(clipboard, 'desktop_display', return_value=(':0', '/run/test/Xauthority')), \
+             patch.object(clipboard.subprocess, 'run') as command, \
+             patch.object(clipboard.os, 'open', side_effect=[10, 11]), \
+             patch.object(clipboard.os, 'close') as close, \
+             patch.object(clipboard, 'bridge') as bridge:
+            command.return_value.stdout = '123\n'
+            clipboard.bridge_desktop('a' * 24)
+            self.assertEqual(bridge.call_args.kwargs['displays'], ((':0', 'cage'),))
+            self.assertEqual(bridge.call_args.kwargs['authorities'], {':0': '/run/test/Xauthority'})
+            self.assertEqual(bridge.call_args.kwargs['namespace_fds'], [10, 11])
+            self.assertEqual(close.call_count, 2)
+
+    def test_only_requested_display_is_selected(self):
+        with tempfile.TemporaryDirectory() as base:
+            instance = 'a' * 24
+            root = Path(base) / ('desktop-' + instance)
+            root.mkdir()
+            (root / 'display').write_text('0\n')
+            (root / 'Xauthority').write_bytes(b'test')
+            self.assertEqual(clipboard.desktop_display(instance, Path(base)), (':0', str(root / 'Xauthority')))
+
+    def test_invalid_instance_and_display_are_rejected(self):
+        with self.assertRaises(ValueError):
+            clipboard.desktop_display('../cage-desktop')
+        with tempfile.TemporaryDirectory() as base:
+            root = Path(base) / ('desktop-' + 'b' * 24)
+            root.mkdir()
+            (root / 'display').write_text('remote:0')
+            (root / 'Xauthority').write_bytes(b'test')
+            with self.assertRaises(ValueError):
+                clipboard.desktop_display('b' * 24, Path(base))
+
 class ContentChoiceTests(unittest.TestCase):
     def test_a_rich_text_copy_with_a_rendered_picture_is_text(self):
         self.assertTrue(clipboard.copies_rich_text(['TARGETS', 'text/rtf', 'UTF8_STRING', 'image/png']))

@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 import RFB from "../.generated/novnc/core/rfb.js";
 import { InlineSelect } from "./inline-select";
-import { api } from "./api";
+import { api, native, nativeAvailable } from "./api";
+import { shareClipboard } from "./shared-clipboard.mjs";
+import { desktopInputChannel } from "./desktop-input-channel.mjs";
+import { installRemoteInput } from "./remote-input";
+import { guestKeys } from "./guest-keys.mjs";
 import { AccountIconNumber } from "./agent-icon";
 import { runtimeSocketURL } from "./client-context.mjs";
 import { translate, useTranslation } from "./interface-language.mjs";
@@ -211,19 +215,41 @@ export function DesktopList({ model, disabled, selected, onDefault }) {
   );
 }
 
-function DesktopPane({ account, visible, close, busy }) {
+function DesktopPane({ account, visible, close, busy, active, activate, keyboard }) {
   const tr = useTranslation();
   const box = useRef(null);
   const [message, setMessage] = useState("");
   const [attempt, retry] = useState(0);
+  const [clipboardMessage, setClipboardMessage] = useState("");
+  const clipboardRef = useRef(null);
+  const inputRef = useRef(null);
+  const current = useRef();
+  current.current = {active, visible, keyboard};
+  useEffect(() => { if (!active) inputRef.current?.deactivate(); }, [active]);
+  useEffect(() => {
+    if (!clipboardMessage) return;
+    const timer = setTimeout(() => setClipboardMessage(''), 5000);
+    return () => clearTimeout(timer);
+  }, [clipboardMessage]);
+  useEffect(() => {
+    if (!visible || !active || !nativeAvailable()) return;
+    const clipboard = shareClipboard({
+      connect: () => new WebSocket(runtimeSocketURL(entry(account.id) + '/clipboard')),
+      native, onStatus: setClipboardMessage, setActive: () => {},
+    });
+    clipboardRef.current = clipboard;
+    return () => { clipboardRef.current = null; clipboard.dispose(); };
+  }, [account.id, account.generation, visible, active]);
   useEffect(() => {
     if (!visible) return;
     let live = true,
-      client;
+      client, input, keys, channel;
+    const element = box.current;
+    const valid = () => live && current.current.active && current.current.visible;
     setMessage("正在连接…");
     const path = entry(account.id);
     api(path + "/vnc-credentials")
-      .then(({ password }) => {
+      .then(({ password, native_input }) => {
         if (!live) return;
         client = new RFB(box.current, runtimeSocketURL(path + "/vnc"), {
           credentials: { password },
@@ -231,10 +257,71 @@ function DesktopPane({ account, visible, close, busy }) {
         client.scaleViewport = true;
         client.resizeSession = true;
         client.focusOnClick = true;
+        keys = guestKeys(client.sendKey.bind(client));
+        client.sendKey = keys.sendKey;
         client.addEventListener("connect", () => {
-          if (live) setMessage("");
+          if (!live) return;
+          setMessage("");
+          channel = desktopInputChannel(() => new WebSocket(runtimeSocketURL(path + '/input')));
+          const request = async value => {
+            if (value.mode !== 'cancel' && !valid()) throw new Error('输入实例已切换，请重新点击输入框');
+            const result = await channel.request(value);
+            if (value.mode !== 'cancel' && !valid()) throw new Error('输入实例已切换，请重新点击输入框');
+            return result;
+          };
+          input = installRemoteInput({
+            events: client,
+            setKeyboardTarget: target => client.cageSetKeyboardTarget(target),
+            sendKey: (...args) => client.sendKey(...args),
+            focus: () => client.focus(),
+            pasteText: text => client.cagePasteText(text),
+            runKeyAction: action => client.cageRunInput(action),
+          }, element, {
+            mode: () => current.current.keyboard,
+            isActive: valid,
+            inputLabel: 'Claude Desktop 输入',
+            tabId: () => account.id,
+            clipboardActive: () => Boolean(clipboardRef.current),
+            syncClipboard: async () => {
+              const clipboard = clipboardRef.current;
+              if (!clipboard) throw new Error('剪贴板连接尚未就绪');
+              await clipboard.sync();
+              if (!valid() || clipboard !== clipboardRef.current) throw new Error('粘贴实例已切换');
+            },
+            caretRect: native_input ? session => request({mode:'status', session}) : undefined,
+            insertComposition: native_input ? (_id, value) => client.cageRunInput(async () => {
+              const result = await request(value);
+              if (value.mode !== 'cancel' && !result.available) throw new Error('输入位置已失去焦点，请重新点击输入框');
+              return result;
+            }) : undefined,
+            insertText: text => !native_input
+              ? client.cagePasteContent(Promise.resolve({text}), undefined, valid)
+              : client.cageRunInput(async () => {
+              const state = await request({mode:'status'});
+              if (!state.available) throw new Error('输入位置已失去焦点，请重新点击输入框');
+              const session = crypto.randomUUID().replaceAll('-', '');
+              const begun = await request({mode:'begin', context:state.context, session, sequence:0});
+              if (!begun.available) throw new Error('输入位置已失去焦点，请重新点击输入框');
+              const result = await request({mode:'commit', session, sequence:1, text});
+              if (!result.available) throw new Error('文字输入未完成，请重新点击输入框');
+            }),
+            pasteContent: async content => {
+              const value = await content;
+              if (!valid()) throw new Error('粘贴实例已切换');
+              if (typeof value.text === 'string') return client.cagePasteText(value.text);
+              throw new Error('请从本机复制图片后，在此实例按粘贴快捷键');
+            },
+            onStatus: setClipboardMessage,
+            onFallback: (_text, message) => setClipboardMessage(message),
+          });
+          inputRef.current = input;
+          if (valid()) client.focus();
         });
         client.addEventListener("disconnect", () => {
+          input?.dispose(); input = undefined;
+          inputRef.current = null;
+          channel?.dispose(); channel = undefined;
+          keys?.stop();
           if (live) setMessage("画面已断开");
         });
       })
@@ -243,15 +330,20 @@ function DesktopPane({ account, visible, close, busy }) {
       });
     return () => {
       live = false;
+      input?.dispose();
+      inputRef.current = null;
+      channel?.dispose();
+      keys?.stop();
       client?.disconnect();
     };
   }, [account.id, account.generation, visible, attempt]);
   return (
-    <section className="account-desktop-pane" id={"desktop-pane-"+account.id} aria-label={title(account)}>
+    <section className="account-desktop-pane" id={"desktop-pane-"+account.id} aria-label={title(account)} onPointerDownCapture={activate} onFocusCapture={activate}>
       <header>
         <strong className="account-desktop-title" title={title(account)}>
           <DesktopAccountLabel account={account} />
         </strong>
+        {clipboardMessage && <span role="status">{clipboardMessage}</span>}
         <button disabled={busy} onClick={close}>
           {tr("关闭实例")}
         </button>
@@ -269,7 +361,9 @@ function DesktopPane({ account, visible, close, busy }) {
   );
 }
 
-export function DesktopPanes({ model, visible }) {
+export function DesktopPanes({ model, visible, keyboard }) {
+  const [focused, setFocused] = useState(null);
+  const activeID = model.panes.some(a => a.id === focused) ? focused : model.panes[0]?.id;
   return (
     <div className="account-desktop-panes">
       {model.panes.map((a) => (
@@ -277,6 +371,9 @@ export function DesktopPanes({ model, visible }) {
           key={a.id}
           account={a}
           visible={visible}
+          keyboard={keyboard}
+          active={activeID === a.id}
+          activate={() => setFocused(a.id)}
           busy={Boolean(model.pending)}
           close={() => model.act(a, "stop")}
         />

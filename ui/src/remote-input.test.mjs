@@ -121,6 +121,8 @@ function fixture(native = false, browserComposition = false, options = {}) {
     {
       mode: () => mode,
       systemClipboard: () => systemClipboard,
+      clipboardActive: options.clipboardActive,
+      syncClipboard: options.syncClipboard,
       preparePaste: options.preparePaste,
       copyText: options.copyText,
       onStatus: (t) => statuses.push(t),
@@ -277,6 +279,18 @@ test("a private browser clipboard uses its surface path while OS sharing is acti
     const context = f.armCopy();
     await f.controller.receiveCopy({ id: "tab-1", text: "private browser copy", context });
     assert.deepEqual(f.writes, ["private browser copy"]);
+  } finally { f.controller.dispose(); }
+});
+
+test("a desktop uses its scoped clipboard and preserves held Control during paste", async () => {
+  let synced = 0;
+  const f = fixture(true, false, {clipboardActive:()=>true, syncClipboard:async()=>{synced++;}});
+  try {
+    f.key('keydown', 'Control', 'ControlLeft', {ctrlKey:true});
+    await f.controller.readAndPaste();
+    assert.equal(synced, 1);
+    assert.equal(f.reads(), 0);
+    assert.ok(!f.keys.some(([sym, , down]) => sym === 0xffe3 && down === false));
   } finally { f.controller.dispose(); }
 });
 

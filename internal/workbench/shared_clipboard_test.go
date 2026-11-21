@@ -58,6 +58,23 @@ func TestLinuxClipboardCommandFitsWindowsProcessLimit(t *testing.T) {
 	}
 }
 
+func TestDesktopClipboardCommandIsScopedAndValidatesID(t *testing.T) {
+	s := testServer(t)
+	id := strings.Repeat("a", 24)
+	cmd, _, err := s.clipboardCommand(t.Context(), "stream", clipboardFileSelection{DesktopID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(cmd.Args[len(cmd.Args)-1], " --desktop "+id) {
+		t.Fatal("desktop clipboard did not select the requested instance")
+	}
+	for _, invalid := range []string{"default", "../other", id + ";echo bad"} {
+		if _, _, err := s.clipboardCommand(t.Context(), "stream", clipboardFileSelection{DesktopID: invalid}); err == nil {
+			t.Fatalf("accepted invalid instance %q", invalid)
+		}
+	}
+}
+
 func TestClipboardFileReleaseWaitsForArchiveReader(t *testing.T) {
 	s := testServer(t)
 	var released [][]string

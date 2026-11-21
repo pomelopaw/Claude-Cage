@@ -33,7 +33,7 @@ func (s *Server) accountDesktopsSupported() bool {
 
 func (s *Server) accountDesktop(w http.ResponseWriter, r *http.Request) {
 	id, action := r.PathValue("id"), r.PathValue("action")
-	if !validClaudeID(id) || !(r.Method == "GET" && (action == "vnc" || action == "vnc-credentials") || r.Method == "POST" && (action == "start" || action == "stop")) {
+	if !validClaudeID(id) || !(r.Method == "GET" && (action == "vnc" || action == "vnc-credentials" || action == "clipboard" || action == "input") || r.Method == "POST" && (action == "start" || action == "stop")) {
 		http.NotFound(w, r)
 		return
 	}
@@ -64,19 +64,27 @@ func (s *Server) accountDesktop(w http.ResponseWriter, r *http.Request) {
 	}
 	run := "/run/desktop-" + id
 	switch action {
+	case "input":
+		// The private HOME is chosen from the authorized instance, never from
+		// input text. Its IBus socket is outside the service's private /tmp.
+		s.streamDesktopCommand(w, r, `exec env HOME="$HOME/.local/share/desktop-profiles/`+id+`/home" /usr/local/bin/cage-native-input --relay`)
+		return
+	case "clipboard":
+		s.sharedDesktopClipboard(w, r, id)
+		return
 	case "vnc":
 		s.streamDesktopSocket(w, r, run+"/vnc.sock")
 		return
 	case "vnc-credentials":
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		b, err := s.guest(ctx, "systemctl is-active --quiet desktop-"+id+".service && cat "+run+"/password")
-		if err != nil || len(b) != 8 {
+		b, err := s.guest(ctx, "systemctl is-active --quiet desktop-"+id+".service && cat "+run+`/password && { if test -S "$HOME/.local/share/desktop-profiles/`+id+`/home/.cache/cage-input/input.sock"; then printf 1; else printf 0; fi; }`)
+		if err != nil || len(b) != 9 || (b[8] != '0' && b[8] != '1') {
 			http.Error(w, "此 Desktop 尚未启动", 409)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		jsonReply(w, map[string]string{"password": string(b)})
+		jsonReply(w, map[string]any{"password": string(b[:8]), "native_input": b[8] == '1'})
 		return
 	}
 	s.launchRequest(w, r, "desktop-instance-"+action, func() error {

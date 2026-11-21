@@ -13,6 +13,7 @@ from pathlib import Path
 import queue
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -330,10 +331,45 @@ def pixel_signature(width, height, rowstride, channels, pixels):
     return digest.digest()
 
 
-def clipboard_worker(name, connection):
+def desktop_display(instance, runtime_root=Path('/run')):
+    if len(instance) != 24 or any(c not in '0123456789abcdef' for c in instance):
+        raise ValueError('Invalid desktop instance')
+    directory = runtime_root / ('desktop-' + instance)
+    display_file, authority = directory / 'display', directory / 'Xauthority'
+    if directory.is_symlink() or display_file.is_symlink() or authority.is_symlink():
+        raise ValueError('Invalid desktop runtime')
+    number = display_file.read_text().strip()
+    if not number.isascii() or not number.isdigit() or len(number) > 5 or not authority.is_file():
+        raise ValueError('Invalid desktop display')
+    return ':' + number, str(authority)
+
+
+def bridge_desktop(instance):
+    display, authority = desktop_display(instance)
+    result = subprocess.run(['systemctl', 'show', 'desktop-' + instance + '.service',
+                             '--property=MainPID', '--value'],
+                            check=True, capture_output=True, text=True, timeout=5)
+    pid = int(result.stdout.strip())
+    if pid <= 1:
+        raise ValueError('Desktop instance is not running')
+    # Only the X11 worker joins the application's namespaces. The parent
+    # retains the common file-transfer cache and its ownership registry.
+    descriptors = [os.open('/proc/' + str(pid) + '/ns/' + name, os.O_RDONLY)
+                   for name in ('mnt', 'net')]
+    try:
+        bridge(displays=((display, 'cage'),), authorities={display: authority},
+               namespace_fds=descriptors, display_exists=lambda name: True)
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def clipboard_worker(name, connection, authority=None):
     os.environ['NO_AT_BRIDGE'] = '1'
     os.environ['DISPLAY'] = name
-    if name == ':78':
+    if authority:
+        os.environ['XAUTHORITY'] = authority
+    elif name == ':78':
         os.environ['XAUTHORITY'] = '/run/cage-desktop/Xauthority'
     else:
         os.environ.pop('XAUTHORITY', None)
@@ -558,7 +594,8 @@ def bridge_wait_timeout(worker_count, total_displays, cleanup_ready, cache_retry
 
 
 def bridge(displays=((':77', 'cage-browser'), (':78', 'cage')), stdin_fd=None, stdout=None,
-           registry=None, spawn_worker=None, display_exists=None, materialize=materialize_guest_files):
+           registry=None, spawn_worker=None, display_exists=None, materialize=materialize_guest_files,
+           authorities=None, namespace_fds=()):
     # GTK's providers use a default display. Keep one small worker per X11
     # session, under that application's UID, and merge only clipboard events.
     import multiprocessing
@@ -591,11 +628,14 @@ def bridge(displays=((':77', 'cage-browser'), (':78', 'cage')), stdin_fd=None, s
             selected.extend(value.get('files', []))
         return selected
     def run_worker(name, connection, uid, gid, home):
+        for descriptor in namespace_fds:
+            os.setns(descriptor, 0)
+            os.close(descriptor)
         os.initgroups(pwd.getpwuid(uid).pw_name, gid)
         os.setgid(gid)
         os.setuid(uid)
         os.environ['HOME'] = home
-        clipboard_worker(name, connection)
+        clipboard_worker(name, connection, (authorities or {}).get(name))
     context = None if spawn_worker is not None else multiprocessing.get_context('fork')
     if spawn_worker is None:
         def spawn_worker(name, user):
@@ -761,7 +801,9 @@ def bridge(displays=((':77', 'cage-browser'), (':78', 'cage')), stdin_fd=None, s
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--import'] or len(sys.argv) == 4 and sys.argv[1:3] == ['--import', '--session']:
+    if len(sys.argv) == 3 and sys.argv[1] == '--desktop':
+        bridge_desktop(sys.argv[2])
+    elif sys.argv[1:] == ['--import'] or len(sys.argv) == 4 and sys.argv[1:3] == ['--import', '--session']:
         print(json.dumps({'paths': import_files(sys.stdin.buffer, sys.argv[3] if len(sys.argv) == 4 else '')}))
     elif len(sys.argv) == 4 and sys.argv[1] == '--export-user' and sys.argv[2] in ('cage', 'cage-browser') and sys.argv[3] == '--paths-stdin':
         import pwd

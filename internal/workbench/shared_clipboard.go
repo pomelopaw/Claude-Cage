@@ -79,6 +79,12 @@ func (s *Server) clipboardCommand(ctx context.Context, operation string, selecti
 	}
 	switch operation {
 	case "stream":
+		if selection.DesktopID != "" {
+			if !validClaudeID(selection.DesktopID) {
+				return nil, "", errors.New("Desktop 标识无效")
+			}
+			command += " --desktop " + shellescape.Quote(selection.DesktopID)
+		}
 	case "import":
 		s.mu.Lock()
 		session := s.clipboardGuestSession
@@ -101,9 +107,10 @@ func (s *Server) clipboardCommand(ctx context.Context, operation string, selecti
 }
 
 type clipboardFileSelection struct {
-	Paths []string
-	User  string
-	lease *clipboardFileLease
+	DesktopID string
+	Paths     []string
+	User      string
+	lease     *clipboardFileLease
 }
 
 type clipboardFileLease struct {
@@ -214,6 +221,10 @@ func (s *Server) clipboardFileSelection(id string) clipboardFileSelection {
 }
 
 func (s *Server) sharedClipboard(w http.ResponseWriter, r *http.Request) {
+	s.sharedDesktopClipboard(w, r, "")
+}
+
+func (s *Server) sharedDesktopClipboard(w http.ResponseWriter, r *http.Request, desktopID string) {
 	s.mu.Lock()
 	available := s.ready && !s.closing && s.clipboardCancel == nil
 	ctx, cancel := context.WithCancel(r.Context())
@@ -228,7 +239,7 @@ func (s *Server) sharedClipboard(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { cancel(); s.mu.Lock(); s.clipboardCancel = nil; s.clipboardRelease = nil; s.mu.Unlock() }()
 	// 以当前后端配套的辅助脚本启动连接，保留 stdin/stdout 传输剪贴板数据。
-	cmd, source, err := s.clipboardCommand(ctx, "stream", clipboardFileSelection{})
+	cmd, source, err := s.clipboardCommand(ctx, "stream", clipboardFileSelection{DesktopID: desktopID})
 	if err != nil {
 		http.Error(w, "剪贴板客机配置无效", 502)
 		return
