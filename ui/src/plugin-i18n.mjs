@@ -31,3 +31,15 @@ export function formatMarketAuthor(author, translateFn) {
   if (!name) return translateFn("作者未注明");
   return name;
 }
+
+export function formatDownloadCount(count, language = "") {
+  if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return "";
+  const whole = Math.floor(count);
+  if (whole <= 0) return "";
+  const locale = typeof language === "string" && language.trim() ? language.trim() : undefined;
+  try {
+    return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(whole);
+  } catch {
+    return whole < 1000 ? String(whole) : `${(whole / 1000).toFixed(1)}K`;
+  }
+}

@@ -335,3 +335,121 @@ func TestLoadI18nReadsPlainFileOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestMarketInstallsFromReleaseAndFallsBackToRaw(t *testing.T) {
+	good := packTar(t, tarFile{name: "notes/", kind: tar.TypeDir}, tarFile{name: "notes/plugin.json", body: marketManifest})
+	bad := packTar(t, tarFile{name: "notes/plugin.json", body: strings.Replace(marketManifest, "1.2.0", "9.9.9", 1)})
+
+	var releaseMode string
+	var releaseHits, rawHits int
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	mux.HandleFunc("/releases/download/packages/", func(w http.ResponseWriter, r *http.Request) {
+		releaseHits++
+		switch releaseMode {
+		case "redirect":
+			http.Redirect(w, r, "/cdn/notes-1.2.0.tar.gz", http.StatusFound)
+		case "corrupt":
+			_, _ = w.Write(bad)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("/cdn/notes-1.2.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(good)
+	})
+	mux.HandleFunc("/dist/notes-1.2.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		rawHits++
+		_, _ = w.Write(good)
+	})
+
+	market := Market{
+		IndexURL:             server.URL + "/index.json",
+		ArchivePrefix:        server.URL + "/dist/",
+		ReleaseArchivePrefix: server.URL + "/releases/download/packages/",
+	}
+	entry := entryFor(market.ArchivePrefix, "notes-1.2.0.tar.gz", good)
+
+	// 1. Release succeeds via 302 redirect: raw archive is never hit.
+	releaseMode = "redirect"
+	if err := market.Install(context.Background(), server.Client(), entry, t.TempDir()); err != nil {
+		t.Fatalf("install via release redirect: %v", err)
+	}
+	if releaseHits != 1 || rawHits != 0 {
+		t.Fatalf("hits after release redirect: release=%d raw=%d, want 1/0", releaseHits, rawHits)
+	}
+
+	// 2. Release 404: falls back transparently to raw archive.
+	releaseMode = "missing"
+	if err := market.Install(context.Background(), server.Client(), entry, t.TempDir()); err != nil {
+		t.Fatalf("install fallback on 404: %v", err)
+	}
+	if releaseHits != 2 || rawHits != 1 {
+		t.Fatalf("hits after 404 fallback: release=%d raw=%d, want 2/1", releaseHits, rawHits)
+	}
+
+	// 3. Release digest mismatch: falls back transparently to raw archive.
+	releaseMode = "corrupt"
+	if err := market.Install(context.Background(), server.Client(), entry, t.TempDir()); err != nil {
+		t.Fatalf("install fallback on digest mismatch: %v", err)
+	}
+	if releaseHits != 3 || rawHits != 2 {
+		t.Fatalf("hits after corrupt fallback: release=%d raw=%d, want 3/2", releaseHits, rawHits)
+	}
+}
+
+func TestMarketFetchStatsAndGracefulDegradation(t *testing.T) {
+	good := packTar(t, tarFile{name: "notes/plugin.json", body: marketManifest})
+	statsStatus := http.StatusOK
+	statsBody := `{"version":1,"updatedAt":"2026-11-24T00:00:00Z","downloads":{"notes":128,"zero":0,"neg":-5,"../bad":99}}`
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	market := Market{
+		IndexURL:      server.URL + "/index.json",
+		ArchivePrefix: server.URL + "/dist/",
+		StatsURL:      server.URL + "/releases/download/packages/stats.json",
+	}
+	mux.HandleFunc("/index.json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "plugins": []MarketEntry{entryFor(market.ArchivePrefix, "notes-1.2.0.tar.gz", good)}})
+	})
+	mux.HandleFunc("/releases/download/packages/stats.json", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(statsStatus)
+		_, _ = w.Write([]byte(statsBody))
+	})
+
+	counts, err := market.FetchStats(context.Background(), server.Client())
+	if err != nil {
+		t.Fatalf("FetchStats: %v", err)
+	}
+	if len(counts) != 1 || counts["notes"] != 128 {
+		t.Fatalf("unexpected FetchStats result: %+v", counts)
+	}
+
+	entries, err := market.Fetch(context.Background(), server.Client())
+	if err != nil || len(entries) != 1 || entries[0].Downloads != 128 {
+		t.Fatalf("Fetch with stats: %+v, err=%v", entries, err)
+	}
+
+	// Missing stats.json (404) must not prevent Fetch from succeeding.
+	statsStatus = http.StatusNotFound
+	entries, err = market.Fetch(context.Background(), server.Client())
+	if err != nil || len(entries) != 1 || entries[0].Downloads != 0 {
+		t.Fatalf("Fetch with 404 stats: %+v, err=%v", entries, err)
+	}
+
+	// Unsupported stats schema version must fail FetchStats but degrade cleanly in Fetch.
+	statsStatus = http.StatusOK
+	statsBody = `{"version":2,"downloads":{"notes":999}}`
+	if _, err := market.FetchStats(context.Background(), server.Client()); err == nil {
+		t.Fatal("expected FetchStats to reject version 2")
+	}
+	entries, err = market.Fetch(context.Background(), server.Client())
+	if err != nil || len(entries) != 1 || entries[0].Downloads != 0 {
+		t.Fatalf("Fetch with version 2 stats: %+v, err=%v", entries, err)
+	}
+}

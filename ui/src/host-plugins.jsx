@@ -9,7 +9,7 @@ import { useWindowVisibility } from "./window-visibility";
 import { sameState } from "./workspace-state.mjs";
 import "./host-plugins.css";
 import { activeInterfaceLanguage, translate, useTranslation } from "./interface-language.mjs";
-import { formatMarketAuthor, localizedPluginText } from "./plugin-i18n.mjs";
+import { formatDownloadCount, formatMarketAuthor, localizedPluginText } from "./plugin-i18n.mjs";
 import { localizeBackendMessage } from "./backend-message.mjs";
 
 const permissions = {
@@ -564,7 +564,12 @@ function MarketCard({ entry, view, busy, onOpen, onInstall }) {
         <PluginIcon name={entry.name} src={entry.icon} size={44} />
         <span className="plugin-card-text">
           <span className="plugin-row-title"><strong>{info.title}</strong><small>{update ? `${entry.plugin.version || "?"} → ${offer.version}` : offer.version}</small></span>
-          <span className="plugin-byline" id={`market-author-${entry.name}`}>{marketByline(offer)}</span>
+          <span className="plugin-byline-row">
+            <span className="plugin-byline" id={`market-author-${entry.name}`}>{marketByline(offer)}</span>
+            {offer.downloads > 0 && <span className="plugin-downloads" title={`${tr("下载次数")} ${offer.downloads.toLocaleString(activeInterfaceLanguage() || undefined)}`}>
+              <Download size={12} aria-hidden="true" />{formatDownloadCount(offer.downloads, activeInterfaceLanguage())}
+            </span>}
+          </span>
           <span className="plugin-card-description">{pluginText(offer)}</span>
           <PurposeTags item={offer} />
         </span>
@@ -858,6 +863,9 @@ function Detail({ model, name, onConfirm, onPage }) {
             {entry.listing ? <span className="plugin-byline">{tr("市场署名：{0}", marketByline(entry.listing))}</span>
               : offer?.source === "market" && <span className="plugin-byline">{marketByline(offer)}</span>}
             {info.version && <span>{tr("版本") + " "}{info.version}</span>}
+            {listing?.downloads > 0 && <span className="plugin-downloads" title={`${tr("下载次数")} ${listing.downloads.toLocaleString(activeInterfaceLanguage() || undefined)}`}>
+              <Download size={13} aria-hidden="true" />{formatDownloadCount(listing.downloads, activeInterfaceLanguage())}
+            </span>}
             {!plugin && offer?.bytes > 0 && <span>{size(offer.bytes)}</span>}
             {plugin && <StateChip state={info.state} />}
             <PurposeTags item={plugin || offer} />
@@ -945,6 +953,7 @@ function Detail({ model, name, onConfirm, onPage }) {
             {runtimeLabel && <div><dt>{tr("运行环境")}</dt><dd>{runtimeLabel}</dd></div>}
             {platformList && <div><dt>{tr("支持系统")}</dt><dd>{platformList}</dd></div>}
             <div><dt>{tr("状态")}</dt><dd>{plugin ? tr(info.state.label) : offer.supported ? tr("未安装") : unsupportedLabel(offer)}</dd></div>
+            {listing?.downloads > 0 && <div><dt>{tr("下载次数")}</dt><dd>{listing.downloads.toLocaleString(activeInterfaceLanguage() || undefined)}</dd></div>}
             {!plugin && offer?.bytes > 0 && <div><dt>{tr("大小")}</dt><dd>{size(offer.bytes)}</dd></div>}
           </dl>
           {upstream && <>

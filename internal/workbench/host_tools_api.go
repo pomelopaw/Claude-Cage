@@ -31,7 +31,7 @@ type hostPluginView struct {
 	// Categories are the plugin's market sections this application knows.
 	Categories []string `json:"categories,omitempty"`
 	// Kind is host or guest: where the plugin's programs run.
-	Kind        string               `json:"kind,omitempty"`
+	Kind          string               `json:"kind,omitempty"`
 	Contributes   *hostContributesView `json:"contributes,omitempty"`
 	BuiltIn       bool                 `json:"built_in,omitempty"`
 	Default       bool                 `json:"default,omitempty"`
@@ -150,10 +150,10 @@ func hostPluginUnavailable(reason string) string {
 
 type hostToolsView struct {
 	// Available is false where the tools cannot run at all.
-	Available bool `json:"available"`
-	Enabled   bool `json:"enabled"`
-	Running   bool `json:"running"`
-	Headless  bool `json:"headless,omitempty"`
+	Available bool   `json:"available"`
+	Enabled   bool   `json:"enabled"`
+	Running   bool   `json:"running"`
+	Headless  bool   `json:"headless,omitempty"`
 	Platform  string `json:"platform,omitempty"`
 	// Directory is where the user puts plugin folders.
 	Directory    string                 `json:"directory"`
@@ -412,8 +412,8 @@ func (s *Server) getHostTools(w http.ResponseWriter, r *http.Request) {
 // Only this computer's own window may: the tools act on this computer.
 func (s *Server) setHostTools(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled *bool  `json:"enabled"`
-		Reload  bool   `json:"reload"`
+		Enabled        *bool  `json:"enabled"`
+		Reload         bool   `json:"reload"`
 		Install        string `json:"install"`
 		RestoreDefault string `json:"restore_default"`
 		Remove         string `json:"remove"`
@@ -568,9 +568,9 @@ type hostMarketEntryView struct {
 	Author      *hostbridge.MarketAuthor            `json:"author,omitempty"`
 	I18n        map[string]hostbridge.LocalizedText `json:"i18n,omitempty"`
 	Permissions []string                            `json:"permissions"`
-	Categories  []string                 `json:"categories,omitempty"`
-	Kind        string                   `json:"kind,omitempty"`
-	Contributes *hostContributesView     `json:"contributes,omitempty"`
+	Categories  []string                            `json:"categories,omitempty"`
+	Kind        string                              `json:"kind,omitempty"`
+	Contributes *hostContributesView                `json:"contributes,omitempty"`
 	// Problem is why the plugin cannot be used with this application.
 	Problem   string `json:"problem,omitempty"`
 	Supported bool   `json:"supported"`
@@ -586,6 +586,8 @@ type hostMarketEntryView struct {
 	Platforms []string `json:"platforms,omitempty"`
 	// Source is the open-source project the plugin is built on.
 	Source *hostbridge.Source `json:"source,omitempty"`
+	// Downloads is the cumulative download count from the market stats table.
+	Downloads int64 `json:"downloads,omitempty"`
 }
 
 const (
@@ -655,7 +657,7 @@ func (s *Server) getHostMarket(w http.ResponseWriter, r *http.Request) {
 		item := hostMarketEntryView{Name: entry.Name, DisplayName: entry.DisplayName, Version: entry.Version, Description: entry.Description, Author: entry.Author, I18n: entry.I18n,
 			Permissions: entry.Permissions, Categories: hostbridge.ShownCategories(entry.Categories), Kind: entry.Kind, Contributes: hostContributes(entry.Contributes), Problem: hostPluginUnavailable(unavailable),
 			Supported: entry.Supported() && unavailable == "", Bytes: entry.Bytes, Icon: entry.Icon != "",
-			Runtime: entry.Runtime, Platforms: platforms, Source: entry.Source}
+			Runtime: entry.Runtime, Platforms: platforms, Source: entry.Source, Downloads: entry.Downloads}
 		if manifest, err := hostbridge.LoadManifest(filepath.Join(s.hostPluginDir(), entry.Name)); err == nil {
 			item.InstalledVersion = manifest.Version
 			item.Update = manifest.Version != entry.Version

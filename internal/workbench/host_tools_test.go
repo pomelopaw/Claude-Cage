@@ -257,19 +257,21 @@ func TestMarketViewKeepsListingAttribution(t *testing.T) {
 	s.hostMarket.fetched = time.Now()
 	s.hostMarket.entries = []hostbridge.MarketEntry{
 		{
-			Name:   "official",
-			Author: &hostbridge.MarketAuthor{Name: "Lee-xeo", Official: true},
-			I18n:   map[string]hostbridge.LocalizedText{"zh-CN": {DisplayName: "官方插件", Description: "官方说明"}},
+			Name:      "official",
+			Author:    &hostbridge.MarketAuthor{Name: "Lee-xeo", Official: true},
+			I18n:      map[string]hostbridge.LocalizedText{"zh-CN": {DisplayName: "官方插件", Description: "官方说明"}},
+			Downloads: 42,
 		},
-		{Name: "community", Author: &hostbridge.MarketAuthor{Name: "Lin"}},
+		{Name: "community", Author: &hostbridge.MarketAuthor{Name: "Lin"}, Downloads: 7},
 		{Name: "legacy"},
 	}
 	recorder := httptest.NewRecorder()
 	s.getHostMarket(recorder, httptest.NewRequest(http.MethodGet, "/api/host-tools/market", nil))
 	var view struct {
 		Entries []struct {
-			Author *hostbridge.MarketAuthor             `json:"author"`
-			I18n   map[string]hostbridge.LocalizedText `json:"i18n"`
+			Author    *hostbridge.MarketAuthor            `json:"author"`
+			I18n      map[string]hostbridge.LocalizedText `json:"i18n"`
+			Downloads int64                               `json:"downloads"`
 		} `json:"entries"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil || len(view.Entries) != len(s.hostMarket.entries) {
@@ -281,6 +283,9 @@ func TestMarketViewKeepsListingAttribution(t *testing.T) {
 		}
 		if !reflect.DeepEqual(entry.I18n, s.hostMarket.entries[i].I18n) {
 			t.Errorf("%s: got i18n %+v, want %+v", s.hostMarket.entries[i].Name, entry.I18n, s.hostMarket.entries[i].I18n)
+		}
+		if entry.Downloads != s.hostMarket.entries[i].Downloads {
+			t.Errorf("%s: got downloads %d, want %d", s.hostMarket.entries[i].Name, entry.Downloads, s.hostMarket.entries[i].Downloads)
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -28,15 +29,24 @@ type Market struct {
 	// must start with, so the list cannot point anywhere else.
 	IndexURL      string
 	ArchivePrefix string
+	// ReleaseArchivePrefix, when set, is tried before entry.Archive with the
+	// same archive filename so GitHub Release download counts advance, falling
+	// back to entry.Archive on error or digest mismatch.
+	ReleaseArchivePrefix string
+	// StatsURL, when set, is the optional JSON table of per-plugin download
+	// counts. Missing or malformed stats never stop the list from loading.
+	StatsURL string
 	// IconPrefix is what a plugin's picture address must start with.
 	IconPrefix string
 }
 
 // CommunityMarket is the public plugin repository.
 var CommunityMarket = Market{
-	IndexURL:      "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/index.json",
-	ArchivePrefix: "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/dist/",
-	IconPrefix:    "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/plugins/",
+	IndexURL:             "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/index.json",
+	ArchivePrefix:        "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/dist/",
+	ReleaseArchivePrefix: "https://github.com/Lee-xeo/cage-plugins/releases/download/packages/",
+	StatsURL:             "https://github.com/Lee-xeo/cage-plugins/releases/download/packages/stats.json",
+	IconPrefix:           "https://raw.githubusercontent.com/Lee-xeo/cage-plugins/main/plugins/",
 }
 
 // MarketEntry is one plugin in the list.
@@ -48,8 +58,8 @@ type MarketEntry struct {
 	Author      *MarketAuthor            `json:"author,omitempty"`
 	I18n        map[string]LocalizedText `json:"i18n,omitempty"`
 	Platforms   []string                 `json:"platforms,omitempty"`
-	Permissions []string      `json:"permissions"`
-	Categories  []string      `json:"categories,omitempty"`
+	Permissions []string                 `json:"permissions"`
+	Categories  []string                 `json:"categories,omitempty"`
 	// Kind, Engines and Contributes repeat the plugin's manifest. Kind is
 	// host when the list leaves it out.
 	Kind        string       `json:"kind,omitempty"`
@@ -73,6 +83,8 @@ type MarketEntry struct {
 	// entries of the same plugin in the market list, for display. Empty means
 	// all platforms (darwin, linux, windows).
 	AllPlatforms []string `json:"-"`
+	// Downloads is the cumulative download count reported by StatsURL, when available.
+	Downloads int64 `json:"-"`
 }
 
 // Source is the project a plugin packages or builds on.
@@ -225,14 +237,55 @@ func mergePlatforms(existing, added []string, allKnown bool) ([]string, bool) {
 
 const (
 	marketIndexLimit   = 4 << 20
+	marketStatsLimit   = 1 << 20
+	marketStatsTimeout = 5 * time.Second
 	marketArchiveLimit = 20 << 20
 	// What an archive may unpack to.
 	marketUnpackedLimit = 100 << 20
 	marketFileLimit     = 2000
 )
 
+// FetchStats reads optional per-plugin download counts from StatsURL.
+func (m Market) FetchStats(ctx context.Context, client *http.Client) (map[string]int64, error) {
+	if m.StatsURL == "" {
+		return nil, nil
+	}
+	data, err := fetchLimited(ctx, client, m.StatsURL, marketStatsLimit)
+	if err != nil {
+		return nil, err
+	}
+	var stats struct {
+		Version   int              `json:"version"`
+		Downloads map[string]int64 `json:"downloads"`
+	}
+	if err := json.Unmarshal(data, &stats); err != nil {
+		return nil, fmt.Errorf("plugin stats: %w", err)
+	}
+	if stats.Version != 1 {
+		return nil, fmt.Errorf("plugin stats has version %d; this application reads version 1", stats.Version)
+	}
+	clean := make(map[string]int64, len(stats.Downloads))
+	for name, count := range stats.Downloads {
+		if !pluginName.MatchString(name) || len(name) > 40 || count <= 0 {
+			continue
+		}
+		clean[name] = count
+	}
+	return clean, nil
+}
+
 // Fetch reads the list. Entries that are not well formed are left out.
 func (m Market) Fetch(ctx context.Context, client *http.Client) ([]MarketEntry, error) {
+	var statsCh chan map[string]int64
+	if m.StatsURL != "" {
+		statsCtx, cancelStats := context.WithTimeout(ctx, marketStatsTimeout)
+		defer cancelStats()
+		statsCh = make(chan map[string]int64, 1)
+		go func() {
+			counts, _ := m.FetchStats(statsCtx, client)
+			statsCh <- counts
+		}()
+	}
 	data, err := fetchLimited(ctx, client, m.IndexURL, marketIndexLimit)
 	if err != nil {
 		return nil, err
@@ -274,6 +327,15 @@ func (m Market) Fetch(ctx context.Context, client *http.Client) ([]MarketEntry, 
 		shown.AllPlatforms = merged
 		seen[entry.Name] = len(entries)
 		entries = append(entries, shown)
+	}
+	if statsCh != nil {
+		if counts := <-statsCh; len(counts) > 0 {
+			for i := range entries {
+				if n := counts[entries[i].Name]; n > 0 {
+					entries[i].Downloads = n
+				}
+			}
+		}
 	}
 	return entries, nil
 }
@@ -345,12 +407,9 @@ func (m Market) Install(ctx context.Context, client *http.Client, entry MarketEn
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	data, err := fetchLimited(ctx, client, entry.Archive, entry.Bytes)
+	data, err := m.fetchArchive(ctx, client, entry)
 	if err != nil {
 		return err
-	}
-	if digest := sha256.Sum256(data); hex.EncodeToString(digest[:]) != strings.ToLower(entry.SHA256) {
-		return errors.New("the downloaded plugin does not match the digest in the plugin list")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -374,6 +433,33 @@ func (m Market) Install(ctx context.Context, client *http.Client, entry MarketEn
 		return errors.New("the plugin declares other permissions than the plugin list shows")
 	}
 	return os.Rename(filepath.Join(staging, entry.Name), target)
+}
+
+// fetchArchive downloads the plugin archive and verifies its SHA-256 digest.
+// When ReleaseArchivePrefix is configured, the mirrored release asset is tried
+// first so GitHub Release download counters advance; any error or digest
+// mismatch transparently falls back to entry.Archive.
+func (m Market) fetchArchive(ctx context.Context, client *http.Client, entry MarketEntry) ([]byte, error) {
+	want := strings.ToLower(entry.SHA256)
+	if m.ReleaseArchivePrefix != "" {
+		file := strings.TrimPrefix(entry.Archive, m.ArchivePrefix)
+		if data, err := fetchLimited(ctx, client, m.ReleaseArchivePrefix+file, entry.Bytes); err == nil {
+			if digest := sha256.Sum256(data); hex.EncodeToString(digest[:]) == want {
+				return data, nil
+			}
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	data, err := fetchLimited(ctx, client, entry.Archive, entry.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if digest := sha256.Sum256(data); hex.EncodeToString(digest[:]) != want {
+		return nil, errors.New("the downloaded plugin does not match the digest in the plugin list")
+	}
+	return data, nil
 }
 
 // unpackPlugin writes the archive's files under into. Everything must be a

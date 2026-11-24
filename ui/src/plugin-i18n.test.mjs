@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMarketAuthor, localizedPluginText, pickPluginLocale } from "./plugin-i18n.mjs";
+import { formatDownloadCount, formatMarketAuthor, localizedPluginText, pickPluginLocale } from "./plugin-i18n.mjs";
 
 test("pickPluginLocale matches exact, case-insensitive, and primary subtag", () => {
   const i18n = {
@@ -29,4 +29,14 @@ test("formatMarketAuthor shows official label, raw GitHub login, or fallback", (
   assert.equal(formatMarketAuthor({ name: " caihao373-star " }, tr), "caihao373-star");
   assert.equal(formatMarketAuthor(null, tr), "[作者未注明]");
   assert.equal(formatMarketAuthor({ name: "  " }, tr), "[作者未注明]");
+});
+
+test("formatDownloadCount formats positive counts compactly and ignores zero or invalid values", () => {
+  assert.equal(formatDownloadCount(0, "en"), "");
+  assert.equal(formatDownloadCount(-5, "en"), "");
+  assert.equal(formatDownloadCount(null, "en"), "");
+  assert.equal(formatDownloadCount(Number.NaN, "en"), "");
+  assert.equal(formatDownloadCount(42, "en"), "42");
+  assert.equal(formatDownloadCount(1500, "en"), "1.5K");
+  assert.ok(formatDownloadCount(15000, "zh-CN").length > 0);
 });
